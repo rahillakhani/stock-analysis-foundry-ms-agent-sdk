@@ -74,6 +74,11 @@ export interface AnalysisRepository {
   getLatestCompletedRun(stockId: string): Promise<AnalysisRunView | null>;
   /** Oldest first. */
   getTimeline(stockId: string): Promise<TimelineEntryView[]>;
+  /**
+   * Marks every PENDING/RUNNING run FAILED. Called at startup: runs in flight when the process stopped can never
+   * finish, and would otherwise block their stock (one in-flight run per stock). Returns the number failed.
+   */
+  failInFlightRuns(failure: RunFailure): Promise<number>;
 }
 
 /** The compact data stored in a timeline entry. */

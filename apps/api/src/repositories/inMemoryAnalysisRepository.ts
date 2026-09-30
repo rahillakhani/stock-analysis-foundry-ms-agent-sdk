@@ -136,6 +136,17 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     );
   }
 
+  failInFlightRuns(failure: RunFailure): Promise<number> {
+    const completedAt = this.#now().toISOString();
+    let count = 0;
+    for (const [id, stored] of this.#runs) {
+      if (stored.view.status !== 'PENDING' && stored.view.status !== 'RUNNING') continue;
+      this.#runs.set(id, { ...stored, view: buildFailedView(stored.view, completedAt, failure) });
+      count++;
+    }
+    return Promise.resolve(count);
+  }
+
   #inFlight(stockId: string): StoredRun | undefined {
     return [...this.#runs.values()].find(
       (r) => r.stockId === stockId && (r.view.status === 'PENDING' || r.view.status === 'RUNNING'),

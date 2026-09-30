@@ -2,16 +2,45 @@ import { describe, expect, it } from 'vitest';
 import { EnvValidationError, loadEnv } from './env.ts';
 
 describe('loadEnv', () => {
-  it('applies defaults for an empty environment', () => {
-    expect(loadEnv({})).toEqual({ NODE_ENV: 'development', HOST: '127.0.0.1', PORT: 3000, LOG_LEVEL: 'info' });
+  const DB = 'postgresql://app@localhost:5432/stock_analysis';
+
+  it('applies defaults, requiring a database URL for the default postgres storage', () => {
+    expect(loadEnv({ DATABASE_URL: DB })).toEqual({
+      NODE_ENV: 'development',
+      HOST: '127.0.0.1',
+      PORT: 3000,
+      LOG_LEVEL: 'info',
+      STORAGE: 'postgres',
+      DATABASE_URL: DB,
+    });
+  });
+
+  it('requires DATABASE_URL when STORAGE=postgres (the default)', () => {
+    expect(() => loadEnv({})).toThrow(/DATABASE_URL: is required when STORAGE=postgres/);
+  });
+
+  it('allows an explicit in-memory store without a database', () => {
+    expect(loadEnv({ STORAGE: 'memory' })).toMatchObject({ STORAGE: 'memory' });
+  });
+
+  it('rejects a non-postgres DATABASE_URL without echoing it', () => {
+    const secret = 'mysql://root:hunter2@db/x';
+    let message = '';
+    try {
+      loadEnv({ DATABASE_URL: secret });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/DATABASE_URL: must be a postgresql:\/\/ connection URL/);
+    expect(message).not.toContain('hunter2');
   });
 
   it('coerces PORT from a string', () => {
-    expect(loadEnv({ PORT: '8080' }).PORT).toBe(8080);
+    expect(loadEnv({ STORAGE: 'memory', PORT: '8080' }).PORT).toBe(8080);
   });
 
   it('returns a frozen object', () => {
-    expect(Object.isFrozen(loadEnv({}))).toBe(true);
+    expect(Object.isFrozen(loadEnv({ STORAGE: 'memory' }))).toBe(true);
   });
 
   it.each([
@@ -26,9 +55,10 @@ describe('loadEnv', () => {
     ['NODE_ENV', 'staging'],
     ['LOG_LEVEL', 'verbose'],
     ['HOST', ''],
+    ['STORAGE', 'sqlite'],
   ])('rejects %s=%j, naming the variable', (name, value) => {
-    expect(() => loadEnv({ [name]: value })).toThrow(EnvValidationError);
-    expect(() => loadEnv({ [name]: value })).toThrow(new RegExp(`${name}:`));
+    expect(() => loadEnv({ STORAGE: 'memory', [name]: value })).toThrow(EnvValidationError);
+    expect(() => loadEnv({ STORAGE: 'memory', [name]: value })).toThrow(new RegExp(`${name}:`));
   });
 
   it('never echoes the rejected value in the error message', () => {

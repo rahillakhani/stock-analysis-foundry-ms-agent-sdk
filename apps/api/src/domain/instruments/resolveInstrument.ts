@@ -1,4 +1,4 @@
-import type { Exchange, Instrument } from '@stock-analysis/shared';
+import { parseInstrumentKey, type Exchange, type Instrument } from '@stock-analysis/shared';
 import type { InstrumentMaster, InstrumentRecord } from './instrumentMaster.ts';
 
 /**
@@ -126,6 +126,22 @@ export class InstrumentResolver {
     return query.text.length === 0 || query.conflictingExchange ? undefined : query;
   }
 
+  /**
+   * Exact lookup by canonical key (as returned by resolve/search). A futures key must name a listed contract that
+   * is still trading; expired or unknown contracts return undefined.
+   */
+  byKey(key: string): Instrument | undefined {
+    const parsed = parseInstrumentKey(key);
+    if (!parsed) return undefined;
+    const record = this.#master.all().find((r) => r.exchange === parsed.exchange && r.symbol === parsed.symbol);
+    if (!record) return undefined;
+    if (parsed.futureExpiry === undefined) return toSpot(record);
+    const expiry = parsed.futureExpiry;
+    const listed = record.futuresExpiries?.includes(expiry) ?? false;
+    const live = nearestLiveExpiry([expiry], this.#now()) === expiry;
+    return listed && live ? toFuture(record, expiry) : undefined;
+  }
+
   #candidates(query: ParsedQuery): readonly InstrumentRecord[] {
     const all = this.#master.all();
     return query.exchange ? all.filter((record) => record.exchange === query.exchange) : all;
@@ -153,29 +169,28 @@ export class InstrumentResolver {
   }
 
   #toInstruments(records: readonly InstrumentRecord[], wantsFutures: boolean): Instrument[] {
-    if (!wantsFutures) {
-      return records.map((record) => ({
-        exchange: record.exchange,
-        symbol: record.symbol,
-        name: record.name,
-        assetType: record.assetType,
-      }));
-    }
+    if (!wantsFutures) return records.map(toSpot);
     const now = this.#now();
     return records.flatMap((record): Instrument[] => {
       const expiry = record.futuresExpiries ? nearestLiveExpiry(record.futuresExpiries, now) : undefined;
-      if (expiry === undefined || record.futuresLotSize === undefined) return [];
-      return [
-        {
-          exchange: record.exchange,
-          symbol: record.symbol,
-          name: `${record.name} Futures ${expiry}`,
-          assetType: 'FUTURE',
-          contract: { expiry, lotSize: record.futuresLotSize },
-        },
-      ];
+      return expiry === undefined ? [] : [toFuture(record, expiry)].filter((i): i is Instrument => i !== undefined);
     });
   }
+}
+
+function toSpot(record: InstrumentRecord): Instrument {
+  return { exchange: record.exchange, symbol: record.symbol, name: record.name, assetType: record.assetType };
+}
+
+function toFuture(record: InstrumentRecord, expiry: string): Instrument | undefined {
+  if (record.futuresLotSize === undefined) return undefined;
+  return {
+    exchange: record.exchange,
+    symbol: record.symbol,
+    name: `${record.name} Futures ${expiry}`,
+    assetType: 'FUTURE',
+    contract: { expiry, lotSize: record.futuresLotSize },
+  };
 }
 
 /** Lower rank = better match; undefined = no match. */

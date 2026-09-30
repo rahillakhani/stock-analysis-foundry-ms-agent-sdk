@@ -238,6 +238,22 @@ export function describeAnalysisRepositoryContract(
       expect(timeline.map((t) => t.id)).toEqual(timeline.map((t) => t.id).sort());
     });
 
+    it('fails every in-flight run at startup so their stocks are not blocked', async () => {
+      const a = await repo.upsertStock(TESTCO);
+      const b = await repo.upsertStock(OTHERCO);
+      const pending = await repo.createRun(a.id);
+      const running = await repo.createRun(b.id);
+      await repo.markRunning(running.id);
+      clock.set('2026-09-30T10:05:00.000Z');
+
+      expect(await repo.failInFlightRuns({ code: 'INTERRUPTED', message: 'Interrupted by a restart.' })).toBe(2);
+      for (const id of [pending.id, running.id]) {
+        expect(await repo.getRun(id)).toMatchObject({ status: 'FAILED', error: { code: 'INTERRUPTED' } });
+      }
+      await expect(repo.createRun(a.id)).resolves.toMatchObject({ status: 'PENDING' });
+      expect(await repo.failInFlightRuns({ code: 'INTERRUPTED', message: 'x' })).toBe(1);
+    });
+
     it('keeps timelines separate per stock', async () => {
       const a = await repo.upsertStock(TESTCO);
       const b = await repo.upsertStock(OTHERCO);

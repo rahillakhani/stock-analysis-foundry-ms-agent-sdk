@@ -61,6 +61,8 @@ export const errorHandler: ErrorRequestHandler = (err: unknown, req, res, next) 
   }
 
   const body: ProblemDetails = {
+    // Extensions first so they can never overwrite the standard members.
+    ...(err instanceof AppError ? err.extensions : {}),
     type: 'about:blank',
     title: statusTitle(status),
     status,

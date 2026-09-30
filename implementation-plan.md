@@ -349,7 +349,9 @@ Each item can be its own commit.
 | Phase 6 review | Reviewer → Implementer | Done; major (Prisma completeRun committed a view-invalid, unreadable row) and minors fixed | The full view is now validated inside the transaction before writes, in both implementations; new migration `tighten_run_checks` (NULL-safe dimension checks, no decision data on in-flight or failed runs, dimension allow-list, ELSE false); read-in-transaction; UUID handling; id tie-breaks; `*_test` DB guard. test:int 31 pass (local) | — |
 | Phase 7a: Research (sample data) | Implementer | Done | 2026-09-30: provider port, synthetic sample-data provider (seeded per symbol and day), aggregator (per-dimension timeout, bounded retry with jitter, cancellation, partial results, untrusted-output validation); 21 tests; gate exit 0 (447 tests) | Phase 8 |
 | Phase 7b: MCP client | Implementer | Deferred until after the UI (see execution order change) | — | — |
-| Phases 8–9 | Implementer | Not started | — | Tester per phase |
+| Phase 7a review | Reviewer → Implementer | Done; 3 majors fixed in `bdf504f` (signal-ignoring provider hang, oversized sources failing the run, source-id spoofing across dimensions) | 32 research tests | — |
+| Phase 8: API | Implementer | Done, pending review | 2026-09-30: AnalysisService (lookup, in-process background runs, interrupted-run recovery, cancel on shutdown), `/api/v1` routes with request and response contract validation, `/readyz`, STORAGE and DATABASE_URL config; gate exit 0 (502 tests; 23 API tests), test:int 32 pass. Manual run against local Postgres: search, lookup, analyze (SUCCEEDED, DONT_BUY), existing-analysis prompt, 409 ANALYSIS_EXISTS, futures lookup | Review, then Phase 9 |
+| Phase 9: Web UI | Implementer | Not started | — | — |
 | Phases 11–13 | Implementer | Blocked on decisions 1–2 | — | — |
 
 ## 4. Residual risks

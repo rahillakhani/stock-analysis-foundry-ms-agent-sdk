@@ -124,6 +124,30 @@ describe('InstrumentResolver.resolve', () => {
   });
 });
 
+describe('InstrumentResolver.byKey', () => {
+  it.each([
+    ['NSE:TATASTEEL', 'NSE:TATASTEEL'],
+    ['BSE:RELIANCE', 'BSE:RELIANCE'],
+    ['NSE:NIFTY', 'NSE:NIFTY'],
+    ['NSE:NIFTY:FUT:2026-10-27', 'NSE:NIFTY:FUT:2026-10-27'],
+    ['NSE:RELIANCE:FUT:2026-11-24', 'NSE:RELIANCE:FUT:2026-11-24'],
+  ])('finds %s', (key, expected) => {
+    const instrument = resolver.byKey(key);
+    expect(instrument && instrumentKey(instrument)).toBe(expected);
+  });
+
+  it.each([
+    ['unknown symbol', 'NSE:ZZZZ'],
+    ['wrong exchange', 'BSE:INFY'],
+    ['malformed key', 'tatasteel'],
+    ['expired contract', 'NSE:NIFTY:FUT:2026-09-29'],
+    ['unlisted expiry', 'NSE:NIFTY:FUT:2026-10-20'],
+    ['futures on a stock without F&O', 'NSE:ITC:FUT:2026-10-27'],
+  ])('returns undefined for %s', (_label, key) => {
+    expect(resolver.byKey(key)).toBeUndefined();
+  });
+});
+
 describe('nearestLiveExpiry (IST, 15:30 cutoff)', () => {
   const expiries = ['2026-10-27', '2026-11-24'];
 

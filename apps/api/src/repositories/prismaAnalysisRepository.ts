@@ -202,6 +202,14 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
     return run ? toRunView(run, run.stock) : null;
   }
 
+  async failInFlightRuns(failure: RunFailure): Promise<number> {
+    const updated = await this.#db.analysisRun.updateMany({
+      where: { status: { in: IN_FLIGHT } },
+      data: { status: 'FAILED', completedAt: this.#now(), error: { code: failure.code, message: failure.message } },
+    });
+    return updated.count;
+  }
+
   async getTimeline(stockId: string): Promise<TimelineEntryView[]> {
     if (!isUuid(stockId)) return [];
     const entries = await this.#db.analysisTimeline.findMany({
