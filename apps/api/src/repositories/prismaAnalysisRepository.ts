@@ -1,10 +1,8 @@
 import {
   AnalysisRunView,
-  DecisionResult,
-  Explanation,
   Instrument,
   instrumentKey,
-  Source,
+  ResearchSnapshot,
   TimelineEntryView,
 } from '@stock-analysis/shared';
 import { z } from 'zod';
@@ -12,6 +10,9 @@ import type { PrismaClient } from '../db/prisma.ts';
 import { Prisma, type AnalysisRun, type AnalysisTimeline, type Stock } from '../generated/prisma/client.ts';
 import {
   assertDimensionsMatchStatus,
+  buildCompletedView,
+  buildFailedView,
+  isUuid,
   RunInFlightError,
   RunStateError,
   timelineSnapshot,
@@ -22,13 +23,20 @@ import {
 } from './analysisRepository.ts';
 
 const IN_FLIGHT_INDEX = 'AnalysisRun_one_in_flight_per_stock';
+const IN_FLIGHT: ('PENDING' | 'RUNNING')[] = ['PENDING', 'RUNNING'];
 const TimelineSnapshot = z.object({
   indicator: z.enum(['BUY', 'DONT_BUY', 'NEUTRAL']),
   confidenceScore: z.number(),
   policyVersion: z.string(),
 });
 
-/** Postgres-backed repository. JSON columns are validated with the shared Zod contracts on every read. */
+type Db = PrismaClient | Prisma.TransactionClient;
+
+/**
+ * Postgres-backed repository. Every state change validates the complete resulting AnalysisRunView before writing,
+ * inside a transaction that also reads the result, so a committed row is always readable and a caller never sees
+ * another writer's state. JSON columns are validated with the shared Zod contracts on every read.
+ */
 export class PrismaAnalysisRepository implements AnalysisRepository {
   readonly #db: PrismaClient;
   readonly #now: () => Date;
@@ -62,101 +70,130 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
   }
 
   async createRun(stockId: string): Promise<AnalysisRunView> {
-    try {
-      const run = await this.#db.analysisRun.create({
-        data: { stockId, status: 'PENDING', startedAt: this.#now() },
-        include: { stock: true },
-      });
-      return toRunView(run, run.stock);
-    } catch (err) {
-      if (isUniqueViolation(err, IN_FLIGHT_INDEX)) {
-        const inFlight = await this.findInFlightRun(stockId);
-        throw new RunInFlightError(inFlight?.id ?? 'unknown');
+    if (!isUuid(stockId)) throw new RunStateError(`Unknown stock ${stockId}`);
+    // Two attempts: if the winning in-flight run finishes between our conflict and our re-read, try again.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const run = await this.#db.analysisRun.create({
+          data: { stockId, status: 'PENDING', startedAt: this.#now() },
+          include: { stock: true },
+        });
+        return toRunView(run, run.stock);
+      } catch (err) {
+        if (isUniqueViolation(err, IN_FLIGHT_INDEX)) {
+          const inFlight = await this.findInFlightRun(stockId);
+          if (inFlight) throw new RunInFlightError(inFlight.id);
+          if (attempt < 2) continue;
+        }
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
+          throw new RunStateError(`Unknown stock ${stockId}`);
+        }
+        throw err;
       }
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
-        throw new RunStateError(`Unknown stock ${stockId}`);
-      }
-      throw err;
     }
   }
 
   async markRunning(runId: string): Promise<AnalysisRunView> {
-    const updated = await this.#db.analysisRun.updateMany({
-      where: { id: runId, status: 'PENDING' },
-      data: { status: 'RUNNING' },
+    if (!isUuid(runId)) throw new RunStateError(`Unknown run ${runId}`);
+    return this.#db.$transaction(async (tx) => {
+      const updated = await tx.analysisRun.updateMany({
+        where: { id: runId, status: 'PENDING' },
+        data: { status: 'RUNNING' },
+      });
+      if (updated.count === 0) throw await stateError(tx, runId);
+      return requireRun(tx, runId);
     });
-    if (updated.count === 0) throw await this.#stateError(runId);
-    return this.#requireRun(runId);
   }
 
   async completeRun(runId: string, input: CompletedRunInput): Promise<AnalysisRunView> {
     assertDimensionsMatchStatus(input);
-    const decision = DecisionResult.parse(input.decision);
-    const explanation = Explanation.parse(input.explanation);
-    const sources = z.array(Source).parse(input.sources);
+    if (!isUuid(runId)) throw new RunStateError(`Unknown run ${runId}`);
+    const snapshot = ResearchSnapshot.parse(input.snapshot);
     const completedAt = this.#now();
 
-    await this.#db.$transaction(async (tx) => {
+    return this.#db.$transaction(async (tx) => {
+      const run = await tx.analysisRun.findUnique({ where: { id: runId }, include: { stock: true } });
+      if (!run || !IN_FLIGHT.includes(run.status as 'PENDING' | 'RUNNING')) throw await stateError(tx, runId);
+      // Validate the full view (cross-field rules included) before any write, so nothing unreadable is committed.
+      const view = buildCompletedView(
+        { id: run.id, instrumentKey: run.stock.instrumentKey, startedAt: run.startedAt.toISOString() },
+        completedAt.toISOString(),
+        input,
+      );
+      if (view.status !== 'SUCCEEDED' && view.status !== 'PARTIAL') throw new RunStateError('unexpected view status');
+
       const updated = await tx.analysisRun.updateMany({
-        where: { id: runId, status: { in: ['PENDING', 'RUNNING'] } },
+        where: { id: runId, status: { in: IN_FLIGHT } },
         data: {
-          status: input.status,
+          status: view.status,
           completedAt,
-          policyVersion: decision.policyVersion,
-          decisionIndicator: decision.indicator,
-          confidenceScore: decision.confidenceScore,
-          fundamentalScore: decision.subscores.fundamental,
-          technicalScore: decision.subscores.technical,
-          derivativesScore: decision.subscores.derivatives,
-          sentimentScore: decision.subscores.sentiment,
-          decision,
-          explanation,
-          researchSnapshot: input.snapshot,
-          sources,
+          policyVersion: view.decision.policyVersion,
+          decisionIndicator: view.decision.indicator,
+          confidenceScore: view.decision.confidenceScore,
+          fundamentalScore: view.decision.subscores.fundamental,
+          technicalScore: view.decision.subscores.technical,
+          derivativesScore: view.decision.subscores.derivatives,
+          sentimentScore: view.decision.subscores.sentiment,
+          decision: view.decision,
+          explanation: view.explanation,
+          researchSnapshot: snapshot,
+          sources: view.sources,
           unavailableDimensions: input.unavailableDimensions,
         },
       });
-      if (updated.count === 0) throw await this.#stateError(runId);
+      if (updated.count === 0) throw await stateError(tx, runId);
 
-      const run = await tx.analysisRun.findUniqueOrThrow({ where: { id: runId }, select: { stockId: true } });
       const priorEntries = await tx.analysisTimeline.count({ where: { stockId: run.stockId } });
       await tx.analysisTimeline.create({
         data: {
           stockId: run.stockId,
           analysisRunId: runId,
           eventType: priorEntries === 0 ? 'INITIAL_RESEARCH' : 'RE_ANALYSIS',
-          snapshotData: timelineSnapshot(decision),
+          snapshotData: timelineSnapshot(view.decision),
           createdAt: completedAt,
         },
       });
       await tx.stock.update({ where: { id: run.stockId }, data: { lastAnalysedAt: completedAt } });
+      return requireRun(tx, runId);
     });
-    return this.#requireRun(runId);
   }
 
   async failRun(runId: string, failure: RunFailure): Promise<AnalysisRunView> {
-    const updated = await this.#db.analysisRun.updateMany({
-      where: { id: runId, status: { in: ['PENDING', 'RUNNING'] } },
-      data: { status: 'FAILED', completedAt: this.#now(), error: { code: failure.code, message: failure.message } },
+    if (!isUuid(runId)) throw new RunStateError(`Unknown run ${runId}`);
+    const completedAt = this.#now();
+    return this.#db.$transaction(async (tx) => {
+      const run = await tx.analysisRun.findUnique({ where: { id: runId }, include: { stock: true } });
+      if (!run || !IN_FLIGHT.includes(run.status as 'PENDING' | 'RUNNING')) throw await stateError(tx, runId);
+      buildFailedView(
+        { id: run.id, instrumentKey: run.stock.instrumentKey, startedAt: run.startedAt.toISOString() },
+        completedAt.toISOString(),
+        failure,
+      );
+      const updated = await tx.analysisRun.updateMany({
+        where: { id: runId, status: { in: IN_FLIGHT } },
+        data: { status: 'FAILED', completedAt, error: { code: failure.code, message: failure.message } },
+      });
+      if (updated.count === 0) throw await stateError(tx, runId);
+      return requireRun(tx, runId);
     });
-    if (updated.count === 0) throw await this.#stateError(runId);
-    return this.#requireRun(runId);
   }
 
   async getRun(runId: string): Promise<AnalysisRunView | null> {
-    const run = await this.#db.analysisRun.findUnique({ where: { id: runId }, include: { stock: true } });
-    return run ? toRunView(run, run.stock) : null;
+    if (!isUuid(runId)) return null;
+    return findRun(this.#db, runId);
   }
 
   async findInFlightRun(stockId: string): Promise<AnalysisRunView | null> {
+    if (!isUuid(stockId)) return null;
     const run = await this.#db.analysisRun.findFirst({
-      where: { stockId, status: { in: ['PENDING', 'RUNNING'] } },
+      where: { stockId, status: { in: IN_FLIGHT } },
       include: { stock: true },
     });
     return run ? toRunView(run, run.stock) : null;
   }
 
   async getLatestCompletedRun(stockId: string): Promise<AnalysisRunView | null> {
+    if (!isUuid(stockId)) return null;
     const run = await this.#db.analysisRun.findFirst({
       where: { stockId, status: { in: ['SUCCEEDED', 'PARTIAL'] } },
       orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
@@ -166,23 +203,29 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
   }
 
   async getTimeline(stockId: string): Promise<TimelineEntryView[]> {
+    if (!isUuid(stockId)) return [];
     const entries = await this.#db.analysisTimeline.findMany({
       where: { stockId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     return entries.map(toTimelineEntry);
   }
+}
 
-  async #requireRun(runId: string): Promise<AnalysisRunView> {
-    const run = await this.getRun(runId);
-    if (!run) throw new RunStateError(`Unknown run ${runId}`);
-    return run;
-  }
+async function findRun(db: Db, runId: string): Promise<AnalysisRunView | null> {
+  const run = await db.analysisRun.findUnique({ where: { id: runId }, include: { stock: true } });
+  return run ? toRunView(run, run.stock) : null;
+}
 
-  async #stateError(runId: string): Promise<RunStateError> {
-    const run = await this.#db.analysisRun.findUnique({ where: { id: runId }, select: { status: true } });
-    return new RunStateError(run ? `Run ${runId} is ${run.status}` : `Unknown run ${runId}`);
-  }
+async function requireRun(db: Db, runId: string): Promise<AnalysisRunView> {
+  const run = await findRun(db, runId);
+  if (!run) throw new RunStateError(`Unknown run ${runId}`);
+  return run;
+}
+
+async function stateError(db: Db, runId: string): Promise<RunStateError> {
+  const run = await db.analysisRun.findUnique({ where: { id: runId }, select: { status: true } });
+  return new RunStateError(run ? `Run ${runId} is ${run.status}` : `Unknown run ${runId}`);
 }
 
 function toStockRecord(stock: Stock): StockRecord {
@@ -228,7 +271,10 @@ function toTimelineEntry(entry: AnalysisTimeline): TimelineEntryView {
   });
 }
 
-/** Unique-constraint violation on a specific index (Prisma P2002, or a raw 23505 surfaced by the pg adapter). */
+/**
+ * Unique-constraint violation on a specific index. With @prisma/adapter-pg, Prisma reports P2002 and names the
+ * index in the error meta (driverAdapterError.cause.constraint.index) and message.
+ */
 function isUniqueViolation(err: unknown, index: string): boolean {
   if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') return false;
   return JSON.stringify(err.meta ?? {}).includes(index) || err.message.includes(index);

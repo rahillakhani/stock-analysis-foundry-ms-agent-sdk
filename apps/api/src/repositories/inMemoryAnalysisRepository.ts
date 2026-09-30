@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
   AnalysisRunView,
+  Instrument,
   instrumentKey,
+  ResearchSnapshot,
   TimelineEntryView,
-  type Instrument,
   type TimelineEntryView as TimelineEntry,
 } from '@stock-analysis/shared';
 import {
   assertDimensionsMatchStatus,
+  buildCompletedView,
+  buildFailedView,
   RunInFlightError,
   RunStateError,
   timelineSnapshot,
@@ -37,7 +40,10 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     this.#now = now;
   }
 
-  upsertStock(instrument: Instrument): Promise<StockRecord> {
+  upsertStock(input: Instrument): Promise<StockRecord> {
+    const parsed = Instrument.safeParse(input);
+    if (!parsed.success) return Promise.reject(parsed.error);
+    const instrument = parsed.data;
     const key = instrumentKey(instrument);
     const existing = [...this.#stocks.values()].find((s) => s.instrumentKey === key);
     const record: StockRecord = existing
@@ -75,23 +81,14 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
   completeRun(runId: string, input: CompletedRunInput): Promise<AnalysisRunView> {
     try {
       assertDimensionsMatchStatus(input);
+      ResearchSnapshot.parse(input.snapshot);
     } catch (err) {
       return rejectWith(err);
     }
     const completedAt = this.#now().toISOString();
     return this.#transition(runId, ['PENDING', 'RUNNING'], (view, stored) => {
       const hasHistory = this.#timeline.some((t) => t.stockId === stored.stockId);
-      const completed = AnalysisRunView.parse({
-        id: view.id,
-        instrumentKey: view.instrumentKey,
-        startedAt: view.startedAt,
-        status: input.status,
-        completedAt,
-        decision: input.decision,
-        explanation: input.explanation,
-        sources: input.sources,
-        ...(input.status === 'PARTIAL' ? { unavailableDimensions: input.unavailableDimensions } : {}),
-      });
+      const completed = buildCompletedView(view, completedAt, input);
       const entry = TimelineEntryView.parse({
         id: randomUUID(),
         runId: view.id,
@@ -109,16 +106,7 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
 
   failRun(runId: string, failure: RunFailure): Promise<AnalysisRunView> {
     const completedAt = this.#now().toISOString();
-    return this.#transition(runId, ['PENDING', 'RUNNING'], (view) =>
-      AnalysisRunView.parse({
-        id: view.id,
-        instrumentKey: view.instrumentKey,
-        startedAt: view.startedAt,
-        status: 'FAILED',
-        completedAt,
-        error: failure,
-      }),
-    );
+    return this.#transition(runId, ['PENDING', 'RUNNING'], (view) => buildFailedView(view, completedAt, failure));
   }
 
   getRun(runId: string): Promise<AnalysisRunView | null> {
@@ -135,7 +123,7 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     const completed = [...this.#runs.values()]
       .filter((r) => r.stockId === stockId && (r.view.status === 'SUCCEEDED' || r.view.status === 'PARTIAL'))
       .map((r) => r.view)
-      .sort((a, b) => completedAtOf(b).localeCompare(completedAtOf(a)));
+      .sort((a, b) => completedAtOf(b).localeCompare(completedAtOf(a)) || b.id.localeCompare(a.id));
     return Promise.resolve(completed[0] ? structuredClone(completed[0]) : null);
   }
 
@@ -144,7 +132,7 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
       this.#timeline
         .filter((t) => t.stockId === stockId)
         .map((t) => structuredClone(t.entry))
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
     );
   }
 

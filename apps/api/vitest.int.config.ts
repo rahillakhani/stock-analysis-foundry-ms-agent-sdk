@@ -7,6 +7,11 @@ try {
   // No .env: DATABASE_URL_TEST must come from the environment.
 }
 
+const testUrl = process.env.DATABASE_URL_TEST;
+if (testUrl && !new URL(testUrl).pathname.endsWith('_test')) {
+  throw new Error('DATABASE_URL_TEST must point at a database whose name ends in _test (tests TRUNCATE it)');
+}
+
 export default defineConfig({
   test: {
     name: 'api-int',

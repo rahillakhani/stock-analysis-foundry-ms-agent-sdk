@@ -178,6 +178,66 @@ export function describeAnalysisRepositoryContract(
       await expect(repo.createRun(missing)).rejects.toBeInstanceOf(RunStateError);
     });
 
+    it('rejects a completion that fails the view contract and leaves everything unchanged', async () => {
+      const stock = await repo.upsertStock(TESTCO);
+      const run = await repo.createRun(stock.id);
+      const invented = {
+        ...completed(),
+        explanation: {
+          status: 'AVAILABLE' as const,
+          summaryMarkdown: 'x',
+          keyDrivers: [],
+          riskFactors: [],
+          citations: ['fixture:invented'],
+        },
+      };
+
+      await expect(repo.completeRun(run.id, invented)).rejects.toThrow(/not listed in sources/);
+      expect((await repo.getRun(run.id))?.status).toBe('PENDING');
+      expect(await repo.getTimeline(stock.id)).toEqual([]);
+      expect((await repo.findStockByKey('NSE:TESTCO'))?.lastAnalysedAt).toBeNull();
+      await expect(repo.completeRun(run.id, completed())).resolves.toMatchObject({ status: 'SUCCEEDED' });
+    });
+
+    it('rejects an invalid research snapshot', async () => {
+      const stock = await repo.upsertStock(TESTCO);
+      const run = await repo.createRun(stock.id);
+      const bad = {
+        ...completed(),
+        snapshot: { ...completed().snapshot, schemaVersion: 2 },
+      } as unknown as CompletedRunInput;
+      await expect(repo.completeRun(run.id, bad)).rejects.toThrow();
+      expect((await repo.getRun(run.id))?.status).toBe('PENDING');
+    });
+
+    it('rejects an invalid instrument', async () => {
+      await expect(repo.upsertStock({ ...TESTCO, symbol: 'lower' })).rejects.toThrow();
+    });
+
+    it('treats non-UUID ids as not found', async () => {
+      expect(await repo.getRun('abc')).toBeNull();
+      expect(await repo.findInFlightRun('abc')).toBeNull();
+      expect(await repo.getLatestCompletedRun('abc')).toBeNull();
+      expect(await repo.getTimeline('abc')).toEqual([]);
+      await expect(repo.createRun('abc')).rejects.toBeInstanceOf(RunStateError);
+      await expect(repo.markRunning('abc')).rejects.toBeInstanceOf(RunStateError);
+      await expect(repo.completeRun('abc', completed())).rejects.toBeInstanceOf(RunStateError);
+      await expect(repo.failRun('abc', { code: 'X_Y', message: 'x' })).rejects.toBeInstanceOf(RunStateError);
+    });
+
+    it('orders same-millisecond completions deterministically by id', async () => {
+      const stock = await repo.upsertStock(TESTCO);
+      const first = await repo.createRun(stock.id);
+      await repo.completeRun(first.id, completed());
+      const second = await repo.createRun(stock.id);
+      await repo.completeRun(second.id, completed());
+
+      const latest = await repo.getLatestCompletedRun(stock.id);
+      expect(latest?.id).toBe([first.id, second.id].sort().at(-1));
+      const timeline = await repo.getTimeline(stock.id);
+      expect(timeline.map((t) => t.id)).toEqual(timeline.map((t) => t.id).sort());
+    });
+
     it('keeps timelines separate per stock', async () => {
       const a = await repo.upsertStock(TESTCO);
       const b = await repo.upsertStock(OTHERCO);

@@ -1,12 +1,13 @@
-import type {
+import {
   AnalysisRunView,
-  DecisionResult,
-  Explanation,
-  Instrument,
-  ResearchSnapshot,
-  Source,
-  TimelineEntryView,
+  type DecisionResult,
+  type Explanation,
+  type Instrument,
+  type ResearchSnapshot,
+  type Source,
+  type TimelineEntryView,
 } from '@stock-analysis/shared';
+import { z } from 'zod';
 
 export interface StockRecord {
   id: string;
@@ -91,4 +92,37 @@ export function assertDimensionsMatchStatus(input: CompletedRunInput): void {
       partial ? 'PARTIAL runs must name unavailable dimensions' : 'SUCCEEDED runs cannot have unavailable dimensions',
     );
   }
+}
+
+const Uuid = z.uuid();
+
+/** Ids are UUIDs; anything else can't exist, so lookups return null and transitions throw RunStateError. */
+export function isUuid(value: string): boolean {
+  return Uuid.safeParse(value).success;
+}
+
+interface RunIdentity {
+  id: string;
+  instrumentKey: string;
+  startedAt: string;
+}
+
+/**
+ * The complete view a finished run will have, validated (including cross-field rules such as citations resolving
+ * to sources) before anything is written. Throws ZodError for invalid input.
+ */
+export function buildCompletedView(run: RunIdentity, completedAt: string, input: CompletedRunInput): AnalysisRunView {
+  return AnalysisRunView.parse({
+    ...run,
+    status: input.status,
+    completedAt,
+    decision: input.decision,
+    explanation: input.explanation,
+    sources: input.sources,
+    ...(input.status === 'PARTIAL' ? { unavailableDimensions: input.unavailableDimensions } : {}),
+  });
+}
+
+export function buildFailedView(run: RunIdentity, completedAt: string, failure: RunFailure): AnalysisRunView {
+  return AnalysisRunView.parse({ ...run, status: 'FAILED', completedAt, error: failure });
 }
