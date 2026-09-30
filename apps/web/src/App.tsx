@@ -4,7 +4,7 @@ import { createApiClient, type ApiClient } from './api/client.ts';
 import { ReAnalyzeModal } from './components/ReAnalyzeModal.tsx';
 import { ResultView } from './components/ResultView.tsx';
 import { SearchBar } from './components/SearchBar.tsx';
-import { useResearch } from './hooks/useResearch.ts';
+import { useResearch, type ResearchState } from './hooks/useResearch.ts';
 
 interface Props {
   api?: ApiClient;
@@ -14,10 +14,34 @@ interface Props {
 
 const panel = 'rounded-lg border border-border p-4 text-sm';
 
+const PHASE_LABEL = { STARTING: 'Starting analysis of', PENDING: 'Queued:', RUNNING: 'Researching' } as const;
+
+/** One short screen-reader announcement per state change (the whole result isn't re-read). */
+function announcement(state: ResearchState): string {
+  switch (state.kind) {
+    case 'looking-up':
+      return `Looking up ${state.query}`;
+    case 'analyzing':
+      return `Analysing ${state.instrument.name}`;
+    case 'result':
+      return `Analysis ready for ${state.instrument.name}`;
+    case 'not-found':
+      return `No match for ${state.query}`;
+    case 'ambiguous':
+      return `${state.candidates.length} possible matches`;
+    case 'confirm':
+      return `An analysis of ${state.instrument.name} already exists`;
+    case 'run-failed':
+    case 'error':
+      return 'The request failed';
+    case 'idle':
+      return state.notice ?? '';
+  }
+}
+
 export function App({ api: injected, pollIntervalMs, searchDebounceMs }: Props) {
   const api = useMemo(() => injected ?? createApiClient(), [injected]);
   const [state, actions] = useResearch(api, { pollIntervalMs });
-  const busy = state.kind === 'looking-up' || state.kind === 'analyzing';
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
@@ -29,9 +53,13 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs }: Props) 
         </p>
       </header>
 
-      <SearchBar api={api} onSubmit={actions.lookup} disabled={busy} debounceMs={searchDebounceMs} />
+      <SearchBar api={api} onSubmit={actions.lookup} debounceMs={searchDebounceMs} />
 
-      <main className="mt-6" aria-live="polite">
+      <p className="sr-only" role="status" aria-live="polite">
+        {announcement(state)}
+      </p>
+
+      <main className="mt-6">
         {state.kind === 'idle' && state.notice && <p className={panel}>{state.notice}</p>}
 
         {state.kind === 'looking-up' && (
@@ -72,7 +100,7 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs }: Props) 
           <section className={panel} aria-label="Analysis in progress">
             <p className="flex items-center gap-2 text-ink">
               <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-              {state.phase === 'PENDING' ? 'Queued' : 'Researching'} {state.instrument.name}…
+              {PHASE_LABEL[state.phase]} {state.instrument.name}…
             </p>
             <p className="mt-1 text-xs text-ink-3">
               Gathering fundamentals, technicals, F&amp;O data, and sentiment, then applying the decision rules.
@@ -94,7 +122,7 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs }: Props) 
             <button
               type="button"
               onClick={actions.reanalyze}
-              className="mt-3 rounded-md bg-series-1 px-3 py-1.5 text-sm text-white hover:opacity-90"
+              className="mt-3 rounded-md bg-accent px-3 py-1.5 text-sm text-white hover:opacity-90"
             >
               Try again
             </button>
@@ -107,7 +135,7 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs }: Props) 
             <button
               type="button"
               onClick={actions.retry}
-              className="mt-3 rounded-md bg-series-1 px-3 py-1.5 text-sm text-white hover:opacity-90"
+              className="mt-3 rounded-md bg-accent px-3 py-1.5 text-sm text-white hover:opacity-90"
             >
               Retry
             </button>

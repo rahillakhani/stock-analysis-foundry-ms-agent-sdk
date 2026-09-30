@@ -12,6 +12,8 @@
   --text-muted: #6b6a64;
   --series-1: #2a78d6;
   --focus: #2a78d6;
+  /* Filled-button background: white text 6.61:1 (WCAG AA for normal text) in both themes. */
+  --accent: #1d5bb0;
   --buy-bg: #0b6b0b;
   --buy-fg: #ffffff;
   --dontbuy-bg: #a32626;
@@ -60,6 +62,7 @@
   --color-ink-2: var(--text-secondary);
   --color-ink-3: var(--text-muted);
   --color-series-1: var(--series-1);
+  --color-accent: var(--accent);
   --color-focus: var(--focus);
   --color-buy: var(--buy-bg);
   --color-buy-fg: var(--buy-fg);

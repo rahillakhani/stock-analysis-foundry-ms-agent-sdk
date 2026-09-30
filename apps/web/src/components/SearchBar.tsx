@@ -77,8 +77,8 @@ export function SearchBar({ api, onSubmit, disabled = false, debounceMs = 250 }:
           <input
             id={`${listId}-input`}
             role="combobox"
-            aria-expanded={showList}
-            aria-controls={`${listId}-list`}
+            aria-expanded={showList && items.length > 0}
+            aria-controls={items.length > 0 ? `${listId}-list` : undefined}
             aria-autocomplete="list"
             aria-activedescendant={active >= 0 ? `${listId}-opt-${active}` : undefined}
             autoComplete="off"
@@ -90,7 +90,8 @@ export function SearchBar({ api, onSubmit, disabled = false, debounceMs = 250 }:
               setText(event.target.value);
               setOpen(true);
               setActive(-1);
-              if (event.target.value.trim().length === 0) setSuggestions({ status: 'idle' });
+              // Drop the previous query's suggestions at once so a stale item can't be picked during the debounce.
+              setSuggestions(event.target.value.trim().length === 0 ? { status: 'idle' } : { status: 'loading' });
             }}
             onKeyDown={(event) => {
               if (event.key === 'ArrowDown' && items.length > 0) {
@@ -105,32 +106,48 @@ export function SearchBar({ api, onSubmit, disabled = false, debounceMs = 250 }:
                 setActive(-1);
               }
             }}
-            onBlur={() => setTimeout(() => setOpen(false), 150)}
+            onFocus={() => setOpen(true)}
+            onBlur={() => {
+              // Close after a click on an option has been handled; forget the highlight so Enter submits the text.
+              setTimeout(() => {
+                setOpen(false);
+                setActive(-1);
+              }, 150);
+            }}
             className="w-full rounded-lg border border-border bg-surface py-2.5 pr-3 pl-9 text-ink placeholder:text-ink-3 focus:outline-2 focus:outline-focus disabled:opacity-60"
           />
         </div>
         <button
           type="submit"
           disabled={disabled || text.trim().length === 0}
-          className="rounded-lg bg-series-1 px-4 font-medium text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50"
+          className="rounded-lg bg-accent px-4 font-medium text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50"
         >
           Analyse
         </button>
       </div>
-      {showList && (
+      {showList && suggestions.status !== 'ready' && (
+        <p
+          role="status"
+          className="absolute z-10 mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink-3 shadow-lg"
+        >
+          {suggestions.status === 'loading' ? 'Searching…' : 'Suggestions unavailable — press Enter to search anyway.'}
+        </p>
+      )}
+      {showList && suggestions.status === 'ready' && items.length === 0 && (
+        <p
+          role="status"
+          className="absolute z-10 mt-1 w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-ink-3 shadow-lg"
+        >
+          No matches.
+        </p>
+      )}
+      {showList && items.length > 0 && (
         <ul
           id={`${listId}-list`}
           role="listbox"
           aria-label="Suggestions"
           className="absolute z-10 mt-1 max-h-72 w-full overflow-auto rounded-lg border border-border bg-surface py-1 shadow-lg"
         >
-          {suggestions.status === 'loading' && <li className="px-3 py-2 text-sm text-ink-3">Searching…</li>}
-          {suggestions.status === 'error' && (
-            <li className="px-3 py-2 text-sm text-ink-3">Suggestions unavailable — press Enter to search anyway.</li>
-          )}
-          {suggestions.status === 'ready' && items.length === 0 && (
-            <li className="px-3 py-2 text-sm text-ink-3">No matches.</li>
-          )}
           {items.map((item, index) => (
             <li
               key={item.key}

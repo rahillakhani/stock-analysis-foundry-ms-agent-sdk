@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { StrictMode } from 'react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { App } from './App.tsx';
@@ -148,7 +149,7 @@ describe('App: analysing a new stock (spec steps 1–4)', () => {
     const user = await submit('TATASTEEL');
 
     await user.click(await screen.findByRole('button', { name: 'Stop waiting' }));
-    expect(screen.getByText(/stopped waiting/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/stopped waiting/i)[0]).toBeInTheDocument();
     const pollsAfterStop = calls.filter((c) => c.path.includes('/analysis-runs/')).length;
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(calls.filter((c) => c.path.includes('/analysis-runs/')).length).toBe(pollsAfterStop);
@@ -324,5 +325,174 @@ describe('SearchBar autocomplete', () => {
     expect(await screen.findByText(/suggestions unavailable/i)).toBeInTheDocument();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+});
+
+describe('Phase 9 review hardening', () => {
+  it('never shows the old result while a fresh re-analysis is starting', async () => {
+    server.use(
+      noSuggestions,
+      lookupSequence(resolvedExisting(), resolvedExisting(completedRun({ id: OTHER_RUN_ID, indicator: 'BUY' }))),
+      http.post(`${API}/stock/analyze`, async () => {
+        await delay(150);
+        return HttpResponse.json({ runId: OTHER_RUN_ID, status: 'PENDING' }, { status: 202 });
+      }),
+      http.get(`${API}/analysis-runs/${OTHER_RUN_ID}`, () =>
+        HttpResponse.json(completedRun({ id: OTHER_RUN_ID, indicator: 'BUY' })),
+      ),
+    );
+    renderApp();
+    const user = await submit('Tata Steel');
+    await user.click(await screen.findByRole('button', { name: 'Run fresh re-analysis' }));
+
+    expect(screen.queryByRole('article')).not.toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Analysis in progress' })).toHaveTextContent(/starting analysis/i);
+    expect(await screen.findByRole('article')).toHaveTextContent('BUY');
+  });
+
+  it('shows the disclaimer with the previous decision in the re-analysis prompt', async () => {
+    server.use(noSuggestions, lookupSequence(resolvedExisting()));
+    renderApp();
+    await submit('Tata Steel');
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent(/not investment advice/i);
+  });
+
+  it('treats Escape on the prompt as "view existing"', async () => {
+    server.use(noSuggestions, lookupSequence(resolvedExisting()));
+    renderApp();
+    const user = await submit('Tata Steel');
+    await screen.findByRole('alertdialog');
+    await user.keyboard('{Escape}');
+    expect(await screen.findByRole('article')).toBeInTheDocument();
+    expect(calls.some((c) => c.path.endsWith('/stock/analyze'))).toBe(false);
+  });
+
+  it('goes back to the prompt when a record appeared meanwhile (409 ANALYSIS_EXISTS)', async () => {
+    server.use(
+      noSuggestions,
+      lookupSequence(resolvedNew, resolvedExisting()),
+      http.post(`${API}/stock/analyze`, () =>
+        HttpResponse.json({ status: 409, code: 'ANALYSIS_EXISTS', runId: RUN_ID, detail: 'exists' }, { status: 409 }),
+      ),
+    );
+    renderApp();
+    await submit('TATASTEEL');
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent(/record found/i);
+  });
+
+  it('retries after an analyze error by looking the instrument up again', async () => {
+    let analyzeCalls = 0;
+    server.use(
+      noSuggestions,
+      lookupSequence(resolvedNew, resolvedNew, resolvedExisting()),
+      http.post(`${API}/stock/analyze`, () =>
+        analyzeCalls++ === 0
+          ? HttpResponse.json({ status: 503, detail: 'shutting down' }, { status: 503 })
+          : HttpResponse.json({ runId: RUN_ID, status: 'PENDING' }, { status: 202 }),
+      ),
+      http.get(`${API}/analysis-runs/${RUN_ID}`, () => HttpResponse.json(completedRun())),
+    );
+    renderApp();
+    const user = await submit('TATASTEEL');
+    await user.click(within(await screen.findByRole('alert')).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('article')).toBeInTheDocument();
+  });
+
+  it('keeps polling through transient errors', async () => {
+    let polls = 0;
+    server.use(
+      noSuggestions,
+      lookupSequence(resolvedNew, resolvedExisting()),
+      http.post(`${API}/stock/analyze`, () => HttpResponse.json({ runId: RUN_ID, status: 'PENDING' }, { status: 202 })),
+      http.get(`${API}/analysis-runs/${RUN_ID}`, () => {
+        polls++;
+        if (polls === 1) return HttpResponse.error();
+        if (polls === 2) return HttpResponse.json({ status: 502 }, { status: 502 });
+        return HttpResponse.json(completedRun());
+      }),
+    );
+    renderApp();
+    await submit('TATASTEEL');
+    expect(await screen.findByRole('article')).toBeInTheDocument();
+    expect(polls).toBe(3);
+  });
+
+  it('lets a new search cancel an analysis being polled', async () => {
+    server.use(
+      noSuggestions,
+      http.post(`${API}/stock/lookup`, async ({ request }) => {
+        const { query } = (await request.json()) as { query: string };
+        return HttpResponse.json(query === 'TATASTEEL' ? resolvedNew : { status: 'NOT_FOUND' });
+      }),
+      http.post(`${API}/stock/analyze`, () => HttpResponse.json({ runId: RUN_ID, status: 'PENDING' }, { status: 202 })),
+      http.get(`${API}/analysis-runs/${RUN_ID}`, () => HttpResponse.json(inFlight('RUNNING'))),
+    );
+    renderApp();
+    await submit('TATASTEEL');
+    await screen.findByRole('region', { name: 'Analysis in progress' });
+    await submit('ZZZ');
+
+    expect(await screen.findByText(/no instrument matches “zzz”/i)).toBeInTheDocument();
+    const polls = calls.filter((c) => c.path.includes('/analysis-runs/')).length;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.filter((c) => c.path.includes('/analysis-runs/')).length).toBe(polls);
+  });
+
+  it('renders under StrictMode without duplicate or broken requests', async () => {
+    server.use(noSuggestions, lookupSequence({ status: 'NOT_FOUND' }));
+    render(
+      <StrictMode>
+        <App pollIntervalMs={5} searchDebounceMs={5} />
+      </StrictMode>,
+    );
+    await submit('ZZZ');
+    expect(await screen.findByText(/no instrument matches/i)).toBeInTheDocument();
+    expect(calls.filter((c) => c.path.endsWith('/stock/lookup'))).toHaveLength(1);
+  });
+});
+
+describe('SearchBar review hardening', () => {
+  it("does not offer the previous query's suggestions while the next one is pending", async () => {
+    server.use(
+      http.get(`${API}/stock/search`, async ({ request }) => {
+        const q = new URL(request.url).searchParams.get('q');
+        if (q === 'tatap') await delay(200);
+        return HttpResponse.json({
+          candidates: [
+            { key: 'NSE:TATASTEEL', exchange: 'NSE', symbol: 'TATASTEEL', assetType: 'EQUITY', name: 'Tata Steel Ltd' },
+          ],
+        });
+      }),
+    );
+    renderApp();
+    const user = userEvent.setup();
+    const input = screen.getByRole('combobox');
+    await user.type(input, 'tata');
+    await screen.findByRole('option');
+    await user.type(input, 'p');
+    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+    expect(screen.getByText('Searching…')).toBeInTheDocument();
+  });
+
+  it('forgets the highlighted suggestion on blur, so Enter submits the typed text', async () => {
+    server.use(
+      http.get(`${API}/stock/search`, () =>
+        HttpResponse.json({
+          candidates: [{ key: 'NSE:NIFTY', exchange: 'NSE', symbol: 'NIFTY', assetType: 'INDEX', name: 'Nifty 50' }],
+        }),
+      ),
+      lookupSequence({ status: 'NOT_FOUND' }),
+    );
+    renderApp();
+    const user = userEvent.setup();
+    const input = screen.getByRole('combobox');
+    await user.type(input, 'nifty');
+    await screen.findByRole('option');
+    await user.keyboard('{ArrowDown}');
+    await user.click(document.body);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await user.click(input);
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(calls.find((c) => c.path.endsWith('/stock/lookup'))?.body).toEqual({ query: 'nifty' }));
   });
 });

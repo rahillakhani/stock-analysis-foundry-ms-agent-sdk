@@ -2,6 +2,7 @@ import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import type { AnalysisRunView } from '@stock-analysis/shared';
 import { formatAge, formatDateTime } from '../lib/format.ts';
 import { DecisionBadge } from './DecisionBadge.tsx';
+import { Disclaimer } from './Disclaimer.tsx';
 
 interface Props {
   open: boolean;
@@ -33,6 +34,11 @@ export function ReAnalyzeModal({ open, name, ageSeconds, latestRun, onViewExisti
               <span className="tabular-nums">{decision.confidenceScore}% confidence</span>
             </div>
           )}
+          {decision && (
+            <div className="mt-4">
+              <Disclaimer />
+            </div>
+          )}
           <div className="mt-6 flex flex-wrap justify-end gap-2">
             <AlertDialog.Cancel asChild>
               <button
@@ -46,7 +52,7 @@ export function ReAnalyzeModal({ open, name, ageSeconds, latestRun, onViewExisti
               <button
                 type="button"
                 onClick={onReanalyze}
-                className="rounded-md bg-series-1 px-4 py-2 text-sm font-medium text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
               >
                 Run fresh re-analysis
               </button>

@@ -19,7 +19,14 @@ export type ResearchState =
   | { kind: 'not-found'; query: string }
   | { kind: 'ambiguous'; query: string; candidates: InstrumentSummary[] }
   | { kind: 'confirm'; instrument: Instrument; instrumentKey: string; existing: Existing }
-  | { kind: 'analyzing'; instrument: Instrument; instrumentKey: string; runId: string; phase: 'PENDING' | 'RUNNING' }
+  | {
+      kind: 'analyzing';
+      instrument: Instrument;
+      instrumentKey: string;
+      /** STARTING until the API has accepted the run. */
+      phase: 'STARTING' | 'PENDING' | 'RUNNING';
+      runId?: string;
+    }
   | {
       kind: 'result';
       instrument: Instrument;
@@ -37,37 +44,47 @@ export interface ResearchActions {
   reanalyze: () => void;
   retry: () => void;
   stopWaiting: () => void;
-  reset: () => void;
 }
 
 export interface ResearchOptions {
+  /** First poll delay; later polls back off ×1.5 up to maxPollIntervalMs. */
   pollIntervalMs?: number;
+  maxPollIntervalMs?: number;
+  /** Give up waiting (the server keeps running) after this long. */
+  maxWaitMs?: number;
+  /** Consecutive failed polls tolerated (network blips, 5xx) before showing an error. */
+  maxPollErrors?: number;
 }
 
-type Action = { type: 'set'; state: ResearchState };
-
-const reducer = (_state: ResearchState, action: Action): ResearchState => action.state;
+const reducer = (_state: ResearchState, next: ResearchState): ResearchState => next;
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new DOMException('aborted', 'AbortError'));
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('aborted', 'AbortError'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
+
+/** Poll failures worth retrying: network errors and server-side (5xx) errors. */
+const isTransient = (err: unknown) => !(err instanceof ApiError) || err.status >= 500;
 
 /**
  * Drives the spec's flow: lookup (step 1) -> confirm re-analysis when a record exists -> analyze (202) -> poll the
- * run -> show the result with its timeline. Each operation owns an AbortController; starting a new one cancels
- * the previous, and everything is aborted on unmount.
+ * run -> show the result with its timeline. Each operation owns an AbortController; starting a new one cancels the
+ * previous, everything is aborted on unmount, and every state update is dropped once its operation was cancelled,
+ * so a stale response can never overwrite newer state.
  */
 export function useResearch(api: ApiClient, options: ResearchOptions = {}): [ResearchState, ResearchActions] {
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
+  const maxPollIntervalMs = options.maxPollIntervalMs ?? 5000;
+  const maxWaitMs = options.maxWaitMs ?? 5 * 60_000;
+  const maxPollErrors = options.maxPollErrors ?? 3;
   const [state, dispatch] = useReducer(reducer, { kind: 'idle' });
   const stateRef = useRef(state);
   const controllerRef = useRef<AbortController | null>(null);
@@ -76,63 +93,28 @@ export function useResearch(api: ApiClient, options: ResearchOptions = {}): [Res
 
   const set = useCallback((next: ResearchState) => {
     stateRef.current = next;
-    dispatch({ type: 'set', state: next });
+    dispatch(next);
   }, []);
 
-  /** Cancels any in-flight operation and returns a fresh signal for the next one. */
-  const begin = useCallback((): AbortSignal => {
+  /** Cancels any in-flight operation and returns a state setter bound to the new operation. */
+  const begin = useCallback(() => {
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    return controller.signal;
-  }, []);
+    const { signal } = controller;
+    const update = (next: ResearchState) => {
+      if (!signal.aborted) set(next);
+    };
+    return { signal, update };
+  }, [set]);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
 
-  const showResult = useCallback(
-    async (instrument: Instrument, instrumentKey: string, signal: AbortSignal) => {
-      // Re-read via lookup so the timeline and age include the run that just finished.
-      const lookup = await api.lookup(instrumentKey, signal);
-      if (lookup.status !== 'RESOLVED' || !lookup.existing) {
-        throw new Error('Completed analysis was not found on lookup');
-      }
-      const run = lookup.existing.latestRun;
-      if (run.status !== 'SUCCEEDED' && run.status !== 'PARTIAL') throw new Error('Unexpected run state');
-      set({
-        kind: 'result',
-        instrument,
-        instrumentKey,
-        run,
-        timeline: lookup.existing.timeline,
-        ageSeconds: lookup.existing.ageSeconds,
-      });
-    },
-    [api, set],
-  );
-
-  const poll = useCallback(
-    async (instrument: Instrument, instrumentKey: string, runId: string, signal: AbortSignal) => {
-      for (;;) {
-        const run = await api.getRun(runId, signal);
-        if (run.status === 'PENDING' || run.status === 'RUNNING') {
-          set({ kind: 'analyzing', instrument, instrumentKey, runId, phase: run.status });
-          await sleep(pollIntervalMs, signal);
-          continue;
-        }
-        if (run.status === 'FAILED') {
-          set({ kind: 'run-failed', instrument, instrumentKey, run });
-          return;
-        }
-        await showResult(instrument, instrumentKey, signal);
-        return;
-      }
-    },
-    [api, pollIntervalMs, set, showResult],
-  );
-
   const analyze = useCallback(
     async (instrument: Instrument, instrumentKey: string, force: boolean) => {
-      const signal = begin();
+      const { signal, update } = begin();
+      // Leave the previous screen immediately: never show old data while a new analysis starts.
+      update({ kind: 'analyzing', instrument, instrumentKey, phase: 'STARTING' });
       try {
         let runId: string;
         try {
@@ -142,51 +124,90 @@ export function useResearch(api: ApiClient, options: ResearchOptions = {}): [Res
           if (err instanceof ApiError && err.code === 'RUN_IN_FLIGHT' && err.runId) runId = err.runId;
           else throw err;
         }
-        set({ kind: 'analyzing', instrument, instrumentKey, runId, phase: 'PENDING' });
-        await poll(instrument, instrumentKey, runId, signal);
+
+        const deadline = Date.now() + maxWaitMs;
+        let delay = pollIntervalMs;
+        let pollErrors = 0;
+        for (;;) {
+          let run: AnalysisRunView;
+          try {
+            run = await api.getRun(runId, signal);
+            pollErrors = 0;
+          } catch (err) {
+            if (signal.aborted || !isTransient(err) || ++pollErrors >= maxPollErrors) throw err;
+            await sleep(delay, signal);
+            continue;
+          }
+          if (run.status === 'FAILED') return update({ kind: 'run-failed', instrument, instrumentKey, run });
+          if (run.status === 'SUCCEEDED' || run.status === 'PARTIAL') break;
+          update({ kind: 'analyzing', instrument, instrumentKey, runId, phase: run.status });
+          if (Date.now() + delay > deadline) {
+            return update({
+              kind: 'idle',
+              notice: 'This analysis is taking longer than expected. It continues on the server; search again later.',
+            });
+          }
+          await sleep(delay, signal);
+          delay = Math.min(maxPollIntervalMs, Math.round(delay * 1.5));
+        }
+
+        // Re-read via lookup so the timeline and age include the run that just finished.
+        const lookup = await api.lookup(instrumentKey, signal);
+        const run = lookup.status === 'RESOLVED' ? lookup.existing?.latestRun : undefined;
+        if (lookup.status !== 'RESOLVED' || !lookup.existing || !run || !('decision' in run)) {
+          throw new Error('Completed analysis was not found on lookup');
+        }
+        update({
+          kind: 'result',
+          instrument,
+          instrumentKey,
+          run,
+          timeline: lookup.existing.timeline,
+          ageSeconds: lookup.existing.ageSeconds,
+        });
       } catch (err) {
-        // Our own cancellation (new search, stop waiting, unmount): not an error. Checking the signal is robust across
-        // fetch implementations whose AbortError classes differ.
+        // Our own cancellation (new search, stop waiting, unmount) is not an error. Checking the signal is robust
+        // across fetch implementations whose AbortError classes differ.
         if (signal.aborted) return;
         // A record appeared since lookup (e.g. another tab): go back through the confirmation.
         if (err instanceof ApiError && err.code === 'ANALYSIS_EXISTS') {
           void lookupRef.current(instrumentKey);
           return;
         }
-        set({ kind: 'error', message: describeError(err), retry: 'analyze', instrumentKey });
+        update({ kind: 'error', message: describeError(err), retry: 'analyze', instrumentKey });
       }
     },
-    [api, begin, poll, set],
+    [api, begin, maxPollErrors, maxPollIntervalMs, maxWaitMs, pollIntervalMs],
   );
 
   const lookupQuery = useCallback(
     async (query: string) => {
       const trimmed = query.trim();
       if (trimmed.length === 0) return;
-      const signal = begin();
-      set({ kind: 'looking-up', query: trimmed });
+      const { signal, update } = begin();
+      update({ kind: 'looking-up', query: trimmed });
       try {
         const result = await api.lookup(trimmed, signal);
-        if (result.status === 'NOT_FOUND') return set({ kind: 'not-found', query: trimmed });
+        if (result.status === 'NOT_FOUND') return update({ kind: 'not-found', query: trimmed });
         if (result.status === 'AMBIGUOUS') {
-          return set({ kind: 'ambiguous', query: trimmed, candidates: result.candidates });
+          return update({ kind: 'ambiguous', query: trimmed, candidates: result.candidates });
         }
         if (result.existing) {
-          return set({
+          return update({
             kind: 'confirm',
             instrument: result.instrument,
             instrumentKey: result.instrumentKey,
             existing: result.existing,
           });
         }
-        // Spec step 1: no record, so proceed straight to research.
-        await analyze(result.instrument, result.instrumentKey, false);
+        // Spec step 1: no record, so proceed straight to research (analyze starts its own operation).
+        if (!signal.aborted) await analyze(result.instrument, result.instrumentKey, false);
       } catch (err) {
         if (signal.aborted) return;
-        set({ kind: 'error', message: describeError(err), retry: 'lookup', query: trimmed });
+        update({ kind: 'error', message: describeError(err), retry: 'lookup', query: trimmed });
       }
     },
-    [analyze, api, begin, set],
+    [analyze, api, begin],
   );
 
   useEffect(() => {
@@ -217,18 +238,13 @@ export function useResearch(api: ApiClient, options: ResearchOptions = {}): [Res
     },
     retry: () => {
       const current = stateRef.current;
-      if (current.kind === 'error' && current.retry === 'lookup' && current.query) void lookupQuery(current.query);
-      if (current.kind === 'error' && current.retry === 'analyze' && current.instrumentKey) {
-        void lookupQuery(current.instrumentKey);
-      }
+      if (current.kind !== 'error') return;
+      const target = current.retry === 'lookup' ? current.query : current.instrumentKey;
+      if (target) void lookupQuery(target);
     },
     stopWaiting: () => {
       controllerRef.current?.abort();
       set({ kind: 'idle', notice: 'Stopped waiting. The analysis continues on the server; search again to see it.' });
-    },
-    reset: () => {
-      controllerRef.current?.abort();
-      set({ kind: 'idle' });
     },
   };
 
