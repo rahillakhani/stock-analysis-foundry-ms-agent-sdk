@@ -338,7 +338,10 @@ Each item can be its own commit.
 | Phase 2 review | Reviewer (`code-reviewer` agent) | Done; findings 1–7, 9, 10 and the test gaps fixed with tests | Majors: request logs leaked headers, query strings and IPs (now an allowlist serializer); look-alike SDK errors were mapped to 4xx (now exact body-parser types only). Open: finding 8, the conditional exports have no in-app consumer until Phase 3; a stale `dist/` is possible if `npm start` runs without `npm run build` | Phase 3 |
 | Phase 3: Shared contracts | Implementer | Done | 2026-09-30: gate + build all exit 0 (224 tests / 13 files); compiled `dist/` loads from apps/api; a mutation check (removing the citation and quarter-order checks) fails 4 targeted tests | Phase 4 |
 | Phase 3 review | Reviewer (`code-reviewer` agent) | Done; majors 1–4 and minors fixed with tests | Majors: run citations and decision sourceIds now resolve to run sources; STALE removed as a status (the engine derives staleness; windows are recorded with values; the engine classifies OI build-up); snapshot `schemaVersion`; `isReported` replaces `hasValue`. Minors: cross-field checks, ordered quarters, ms-precision UTC timestamps, SourceId/URL hardening, `AnalyzeRequestInput`. Deliberately open: strict `Instrument` (API and web deploy together), no `EARNINGS_UPDATE` producer, macro trends not captured, auditor notes limited to the opinion type | Phase 4 |
-| Phases 4–10 | Implementer | Not started. 4–5 are unblocked without Docker | — | Tester per phase |
+| Phase 4: Normalization | Implementer | Done: `6fd82d8` plus review fixes in `49b0491` | Resolver with a synthetic 36-record list; exact matches resolve, partial input returns candidates; IST expiry cutoff | Phase 5 |
+| Phase 4 review | Reviewer | Done; major (a single fuzzy match auto-resolved) and minors fixed | Open: NSE preference by symbol needs an ISIN match for a real master (Phase 12) | — |
+| Phase 5: Decision engine | Implementer | Done, pending review | 2026-09-30: `docs/decision-policy-v1.md`; gate + build exit 0 (369 tests); `domain/decision` coverage 100% statements and branches (109/109) | Review, then Phase 6 |
+| Phases 6–9 | Implementer | Not started; local Postgres (see execution order change) | — | Tester per phase |
 | Phases 11–13 | Implementer | Blocked on decisions 1–2 | — | — |
 
 ## 4. Residual risks
