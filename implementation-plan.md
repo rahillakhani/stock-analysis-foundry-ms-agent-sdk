@@ -105,6 +105,19 @@ Rules for every phase:
 
 The shared gate for all phases after Phase 1 is `npm run lint && npm run typecheck && npm test`, abbreviated **G** below.
 
+### Execution order change (2026-09-30, requested by the owner)
+
+The goal is a runnable app with working search before any production-readiness work.
+- **Now:** Phases 4 → 5 → 6 → 7 → 8 → 9, against the **local Homebrew PostgreSQL 16** (`localhost:5432`,
+  databases `stock_analysis` and `stock_analysis_test`). No Docker.
+- **Deferred to Phase 14 (after all features):**
+  - `docker-compose.yml` and Dockerfiles (from Phases 6 and 10)
+  - the CI Postgres service job (Phase 6)
+  - compose-based E2E in CI (Phase 10)
+  - all other hardening
+- **Unchanged:** the existing CI workflow keeps running lint/typecheck/unit tests/build. DB integration tests run
+  locally with `npm run test:int`, and are reported as local results.
+
 ### Phase 0: Decision record *(docs only)*
 - **Scope:** `docs/adr/0001-architecture.md` records the decisions for blocking items 1–3 and assumptions A1–A5.
   `docs/decision-policy-v1.md` records the defaults for items 4–8 as a criteria table with thresholds, windows,
