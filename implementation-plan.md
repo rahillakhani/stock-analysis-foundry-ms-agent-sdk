@@ -139,7 +139,7 @@ The shared gate for all phases after Phase 1 is `npm run lint && npm run typeche
 ### Phase 3: Shared domain contracts
 - **Scope:** Zod schemas in `packages/shared`:
   - `Instrument` (`symbol`, `exchange`, `assetType`, optional `contract{expiry, lotSize, underlying}`)
-  - `Metric<T>` (`value | null`, `status: OK|MISSING|STALE|NOT_APPLICABLE|ERROR`, `sourceId`, `observedAt`)
+  - `Metric<T>` (`value | null`, `status: OK|MISSING|NOT_APPLICABLE|ERROR`, `sourceId`, `observedAt`; staleness is derived by the engine, see Phase 3 review)
   - `Source` (`id`, `provider`, `url?`, `retrievedAt`)
   - `ResearchSnapshot` (fundamentals, technicals, derivatives, sentiment, sources[])
   - `DecisionResult`
@@ -320,10 +320,12 @@ Each item can be its own commit.
 | Validate spec and plan | Architect | Done | §1 (npm registry and repo checks, 2026-09-24) | User (decisions) |
 | Blocking decisions 1–3, assumptions A1–A5 | User | Open | — | Architect (Phase 0 ADR) |
 | Claude Code project setup | Implementer | Done | Commit `b215e05` (hooks tested with synthetic inputs) | — |
-| Phase 1: Workspace scaffold | Implementer | Done, commit `30c7dc9` (CI not yet run on GitHub) | 2026-09-29: `npm install` (0 vulns); `format:check`, `lint`, `typecheck`, `test` all exit 0 (10 tests); a negative probe showed typecheck and lint fail on bad code | Phase 2 |
-| Phase 2: API skeleton | Implementer | Done (CI not yet run on GitHub) | 2026-09-30: gate + build all exit 0 (67 tests / 8 files); `npm ci` OK; dev served /healthz and 404 and reloaded on change; prod (`build` + `NODE_ENV=production npm start`) served /healthz; SIGTERM with a busy keep-alive request exited 0 in 319 ms; `import('@stock-analysis/shared')` from apps/api resolves `dist/` (the API doesn't import shared yet) | Phase 3 |
+| Phase 1: Workspace scaffold | Implementer | Done, commit `30c7dc9`; GitHub CI green | 2026-09-29: `npm install` (0 vulns); `format:check`, `lint`, `typecheck`, `test` all exit 0 (10 tests); a negative probe showed typecheck and lint fail on bad code | Phase 2 |
+| Phase 2: API skeleton | Implementer | Done, commit `b9564e1`, merged to `main`; GitHub CI run #1 green | 2026-09-30: gate + build all exit 0 (67 tests / 8 files); `npm ci` OK; dev served /healthz and 404 and reloaded on change; prod (`build` + `NODE_ENV=production npm start`) served /healthz; SIGTERM with a busy keep-alive request exited 0 in 319 ms; `import('@stock-analysis/shared')` from apps/api resolves `dist/` (the API doesn't import shared yet) | Phase 3 |
 | Phase 2 review | Reviewer (`code-reviewer` agent) | Done; findings 1–7, 9, 10 and the test gaps fixed with tests | Majors: request logs leaked headers, query strings and IPs (now an allowlist serializer); look-alike SDK errors were mapped to 4xx (now exact body-parser types only). Open: finding 8, the conditional exports have no in-app consumer until Phase 3; a stale `dist/` is possible if `npm start` runs without `npm run build` | Phase 3 |
-| Phases 3–10 | Implementer | Not started. 3–5 are unblocked without Docker | — | Tester per phase |
+| Phase 3: Shared contracts | Implementer | Done | 2026-09-30: gate + build all exit 0 (224 tests / 13 files); compiled `dist/` loads from apps/api; a mutation check (removing the citation and quarter-order checks) fails 4 targeted tests | Phase 4 |
+| Phase 3 review | Reviewer (`code-reviewer` agent) | Done; majors 1–4 and minors fixed with tests | Majors: run citations and decision sourceIds now resolve to run sources; STALE removed as a status (the engine derives staleness; windows are recorded with values; the engine classifies OI build-up); snapshot `schemaVersion`; `isReported` replaces `hasValue`. Minors: cross-field checks, ordered quarters, ms-precision UTC timestamps, SourceId/URL hardening, `AnalyzeRequestInput`. Deliberately open: strict `Instrument` (API and web deploy together), no `EARNINGS_UPDATE` producer, macro trends not captured, auditor notes limited to the opinion type | Phase 4 |
+| Phases 4–10 | Implementer | Not started. 4–5 are unblocked without Docker | — | Tester per phase |
 | Phases 11–13 | Implementer | Blocked on decisions 1–2 | — | — |
 
 ## 4. Residual risks
