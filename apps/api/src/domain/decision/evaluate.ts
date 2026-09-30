@@ -1,11 +1,11 @@
-import type {
-  DecisionFactor,
-  DecisionIndicator,
-  DecisionResult,
+import {
   ResearchSnapshot,
-  RiskReward,
+  type DecisionFactor,
+  type DecisionIndicator,
+  type DecisionResult,
+  type RiskReward,
 } from '@stock-analysis/shared';
-import { CHECKS_V1, read, type CheckDefinition, type CheckOutcome } from './checks.ts';
+import { checksFor, createReader, type CheckDefinition, type CheckOutcome, type Reader } from './checks.ts';
 import type { DecisionPolicy, Section } from './policy.ts';
 
 interface EvaluatedCheck {
@@ -14,21 +14,27 @@ interface EvaluatedCheck {
 }
 
 const round = (value: number, digits: number) => Number(value.toFixed(digits));
-const clampScore = (value: number) => round(Math.min(100, Math.max(0, value)), 1);
+const clamp = (value: number) => Math.min(100, Math.max(0, value));
 
 /**
  * Deterministic decision for one research snapshot under one policy version (docs/decision-policy-v1.md).
  * Pure: no I/O, no randomness; `now` is used only for `evaluatedAt`. Same snapshot + policy -> same decision.
+ * The snapshot is validated on entry, so unvalidated input can't produce a decision. `checks` overrides the
+ * version's registered check set and exists for engine-invariant tests.
  */
 export function evaluate(
-  snapshot: ResearchSnapshot,
+  input: ResearchSnapshot,
   policy: DecisionPolicy,
   now: Date,
-  checks: readonly CheckDefinition[] = CHECKS_V1,
+  checks: readonly CheckDefinition[] = checksFor(policy),
 ): DecisionResult {
+  if (Number.isNaN(now.getTime())) throw new RangeError('evaluate: invalid clock time');
+  const snapshot = ResearchSnapshot.parse(input);
+  const read = createReader(snapshot, policy);
+
   const evaluated: EvaluatedCheck[] = checks.map((definition) => ({
     definition,
-    outcome: definition.run({ snapshot, policy }),
+    outcome: definition.run({ snapshot, policy, read }),
   }));
   const applicable = evaluated.filter((c) => c.outcome.state !== 'NOT_APPLICABLE');
 
@@ -39,22 +45,27 @@ export function evaluate(
     applicable.some((c) => c.definition.requiredForBuy) && buyGate.every((c) => c.outcome.state === 'PASS');
   const indicator: DecisionIndicator = failedVetoes.length > 0 ? 'DONT_BUY' : canBuy ? 'BUY' : 'NEUTRAL';
 
-  const subscores = {
-    fundamental: subscore(applicable, 'fundamentals') ?? 0,
-    technical: subscore(applicable, 'technicals') ?? 0,
+  const raw = {
+    fundamental: subscore(applicable, 'fundamentals'),
+    technical: subscore(applicable, 'technicals'),
     derivatives: subscore(applicable, 'derivatives'),
-    sentiment: subscore(applicable, 'sentiment') ?? 0,
+    sentiment: subscore(applicable, 'sentiment'),
   };
-
   const usable = applicable.filter((c) => c.outcome.state === 'PASS' || c.outcome.state === 'FAIL');
   const completeness = applicable.length === 0 ? 0 : usable.length / applicable.length;
-  const confidenceScore = clampScore(completeness * strength(indicator, subscores, failedVetoes.length, policy));
+  const confidence = completeness * strength(indicator, Object.values(raw), failedVetoes.length, policy);
 
+  const display = (value: number | null) => (value === null ? null : round(clamp(value), 1));
   return {
     indicator,
-    confidenceScore,
-    subscores,
-    riskReward: riskReward(snapshot, policy),
+    confidenceScore: round(clamp(confidence), 1),
+    subscores: {
+      fundamental: display(raw.fundamental) ?? 0,
+      technical: display(raw.technical) ?? 0,
+      derivatives: display(raw.derivatives),
+      sentiment: display(raw.sentiment) ?? 0,
+    },
+    riskReward: riskReward(snapshot, policy, read),
     reasons: factors(applicable, ['PASS']),
     riskFactors: factors(applicable, ['FAIL', 'UNAVAILABLE']),
     policyVersion: policy.version,
@@ -62,16 +73,16 @@ export function evaluate(
   };
 }
 
-/** 100 × passing scored checks / applicable scored checks; null when none apply (e.g. no F&O contract). */
+/** Unrounded 100 × passing / applicable scored checks; null when none apply to the section. */
 function subscore(applicable: EvaluatedCheck[], section: Section): number | null {
   const scored = applicable.filter((c) => c.definition.scored && c.definition.section === section);
   if (scored.length === 0) return null;
-  return clampScore((100 * scored.filter((c) => c.outcome.state === 'PASS').length) / scored.length);
+  return (100 * scored.filter((c) => c.outcome.state === 'PASS').length) / scored.length;
 }
 
 function strength(
   indicator: DecisionIndicator,
-  subscores: { fundamental: number; technical: number; derivatives: number | null; sentiment: number },
+  subscores: (number | null)[],
   failedVetoCount: number,
   policy: DecisionPolicy,
 ): number {
@@ -79,11 +90,9 @@ function strength(
     return Math.min(100, policy.confidence.vetoBase + policy.confidence.vetoStep * failedVetoCount);
   }
   if (indicator === 'NEUTRAL') return policy.confidence.neutralBase;
-  const values = [subscores.fundamental, subscores.technical, subscores.derivatives, subscores.sentiment].filter(
-    (v): v is number => v !== null,
-  );
-  // Never empty: only the derivatives subscore can be null.
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
+  // Sections without applicable scored checks are excluded from the mean, not counted as 0.
+  const present = subscores.filter((v): v is number => v !== null);
+  return present.length === 0 ? 0 : present.reduce((sum, v) => sum + v, 0) / present.length;
 }
 
 /** Factors in check order; failures before unavailable within risk factors. */
@@ -99,25 +108,27 @@ function factors(applicable: EvaluatedCheck[], states: readonly ('PASS' | 'FAIL'
 }
 
 /** Long-setup estimate from ATR, with an EMA50 support stop when it is tighter. See policy §5. */
-function riskReward(snapshot: ResearchSnapshot, policy: DecisionPolicy): RiskReward | null {
-  const price = read(snapshot.technicals.lastPrice, 'technicals', policy, snapshot.asOf);
-  const atr = read(snapshot.technicals.atr14, 'technicals', policy, snapshot.asOf);
+function riskReward(snapshot: ResearchSnapshot, policy: DecisionPolicy, read: Reader): RiskReward | null {
+  const price = read('technicals', snapshot.technicals.lastPrice);
+  const atr = read('technicals', snapshot.technicals.atr14);
   if (price.kind !== 'USABLE' || atr.kind !== 'USABLE' || atr.value <= 0) return null;
 
   const { stopAtrMultiple, targetAtrMultiple, supportBufferAtr } = policy.riskReward;
   const entry = round(price.value, 2);
   const atrStop = entry - stopAtrMultiple * atr.value;
-  const ema50 = read(snapshot.technicals.ema50, 'technicals', policy, snapshot.asOf);
-  const useSupport = ema50.kind === 'USABLE' && ema50.value > atrStop && ema50.value < entry;
-  const supportStop = useSupport ? ema50.value - supportBufferAtr * atr.value : atrStop;
+  const ema50 = read('technicals', snapshot.technicals.ema50);
+  const supportStop =
+    ema50.kind === 'USABLE' && ema50.value > atrStop && ema50.value < entry
+      ? ema50.value - supportBufferAtr * atr.value
+      : atrStop;
   // The buffer can push the support stop below the ATR stop; never loosen beyond the ATR stop.
-  const stop = round(Math.max(atrStop, supportStop), 2);
+  const usesSupport = supportStop > atrStop;
+  const stop = round(usesSupport ? supportStop : atrStop, 2);
   const target = round(entry + targetAtrMultiple * atr.value, 2);
   if (stop <= 0 || stop >= entry || target <= entry) return null;
 
-  const method =
-    useSupport && supportStop > atrStop
-      ? `Stop ${supportBufferAtr}×ATR14 below EMA50 support, target ${targetAtrMultiple}×ATR14 above entry.`
-      : `Stop ${stopAtrMultiple}×ATR14 below entry, target ${targetAtrMultiple}×ATR14 above entry.`;
+  const method = usesSupport
+    ? `Stop ${supportBufferAtr}×ATR14 below EMA50 support, target ${targetAtrMultiple}×ATR14 above entry.`
+    : `Stop ${stopAtrMultiple}×ATR14 below entry, target ${targetAtrMultiple}×ATR14 above entry.`;
   return { ratio: round((target - entry) / (entry - stop), 2), entry, stop, target, method };
 }

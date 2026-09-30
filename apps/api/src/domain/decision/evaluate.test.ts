@@ -11,7 +11,7 @@ import {
   strongEquity,
   strongFuture,
 } from '../../test-support/snapshots.ts';
-import { CHECKS_V1, classifyOiBuildUp } from './checks.ts';
+import { CHECKS_V1, checksFor, classifyOiBuildUp, fmt } from './checks.ts';
 import { evaluate } from './evaluate.ts';
 import { POLICY_V1 } from './policy.ts';
 
@@ -429,6 +429,266 @@ describe('evaluate: custom check sets (engine invariants beyond v1)', () => {
       confidenceScore: 0,
       subscores: { fundamental: 0, technical: 0, derivatives: null, sentiment: 0 },
     });
+  });
+});
+
+const NA = { status: 'NOT_APPLICABLE' as const, value: null };
+/** An equity that does have an F&O contract: strong equity fundamentals plus the strong future's derivatives. */
+const equityWithFno = (mutate: Mutation) =>
+  withEquity((s) => {
+    s.derivatives = strongFuture().derivatives;
+    mutate(s);
+  });
+const quarters = (...rows: [string, number][]) =>
+  ok(
+    rows.map(([period, valuePct]) => ({ period, valuePct })),
+    SRC_FIN,
+  );
+
+describe('evaluate: NOT_APPLICABLE is fail-closed (review finding 1)', () => {
+  it('baseline: an equity with an F&O contract and strong data is BUY', () => {
+    expect(equityWithFno(() => undefined).indicator).toBe('BUY');
+  });
+
+  it('does not drop the long build-up criterion or the short build-up veto for a partial NOT_APPLICABLE', () => {
+    const result = equityWithFno((s) => {
+      s.derivatives.priceChangePct = NA;
+      s.derivatives.oiChangePct = { status: 'ERROR', value: null, reason: 'timeout' };
+    });
+    expect(result.indicator).toBe('NEUTRAL');
+    expect(codes(result.riskFactors)).toEqual(
+      expect.arrayContaining(['LONG_BUILD_UP_UNAVAILABLE', 'NO_SHORT_BUILD_UP_UNAVAILABLE']),
+    );
+    expect(result.confidenceScore).toBeLessThan(50);
+  });
+
+  it('does not drop the F&O ban veto when only it is marked NOT_APPLICABLE', () => {
+    const result = equityWithFno((s) => void (s.derivatives.inFnoBan = NA));
+    expect(result.indicator).toBe('NEUTRAL');
+    expect(codes(result.riskFactors)).toContain('NOT_IN_FNO_BAN_UNAVAILABLE');
+  });
+
+  it('treats NOT_APPLICABLE fundamentals as unavailable, so BUY is impossible', () => {
+    const s = strongEquity();
+    const fundamentals: Record<string, unknown> = s.fundamentals;
+    for (const key of Object.keys(fundamentals)) fundamentals[key] = NA;
+    const result = run(s);
+    expect(result.indicator).toBe('NEUTRAL');
+    expect(result.subscores.fundamental).toBe(0);
+    expect(codes(result.riskFactors)).toContain('ROE_ABOVE_MIN_UNAVAILABLE');
+  });
+
+  it('treats a single NOT_APPLICABLE technical as unavailable', () => {
+    const result = withEquity((s) => void (s.technicals.ema50 = NA));
+    expect(result.indicator).toBe('NEUTRAL');
+    expect(codes(result.riskFactors)).toContain('PRICE_ABOVE_EMA50_UNAVAILABLE');
+  });
+
+  it('documents v1 index behaviour: fundamentals unavailable, so an index is at best NEUTRAL', () => {
+    const s = strongEquity();
+    s.instrument = { exchange: 'NSE', symbol: 'NIFTY', name: 'Nifty 50', assetType: 'INDEX' };
+    const fundamentals: Record<string, unknown> = s.fundamentals;
+    for (const key of Object.keys(fundamentals)) fundamentals[key] = NA;
+    expect(run(s).indicator).toBe('NEUTRAL');
+  });
+});
+
+describe('evaluate: boundary rows (review finding 12)', () => {
+  it.each<[number, boolean]>([
+    [39.9, false],
+    [40, true],
+    [70, true],
+    [70.1, false],
+  ])('RSI %s in healthy range: %s', (rsi, pass) => {
+    const result = withEquity((s) => void (s.technicals.rsi14 = ok(rsi, SRC_QUOTE)));
+    expect(codes(pass ? result.reasons : result.riskFactors)).toContain(
+      pass ? 'RSI_IN_HEALTHY_RANGE' : 'RSI_OUTSIDE_HEALTHY_RANGE',
+    );
+  });
+
+  it.each<[string, ReturnType<typeof quarters>, string]>([
+    ['flat margins are not shrinking', quarters(['2026-Q1', 13], ['2026-Q2', 13], ['2026-Q3', 13]), 'BUY'],
+    [
+      'only the latest 3 of 4 quarters count (older dip ignored)',
+      quarters(['2025-Q4', 20], ['2026-Q1', 13], ['2026-Q2', 12], ['2026-Q3', 12.5]),
+      'BUY',
+    ],
+    [
+      'the latest 3 of 4 quarters shrinking',
+      quarters(['2025-Q4', 10], ['2026-Q1', 13], ['2026-Q2', 12], ['2026-Q3', 11]),
+      'DONT_BUY',
+    ],
+    [
+      'non-consecutive quarters are undecidable',
+      quarters(['2024-Q1', 13], ['2025-Q3', 12], ['2026-Q3', 11]),
+      'NEUTRAL',
+    ],
+    [
+      'old quarters re-fetched today are undecidable',
+      quarters(['2023-Q1', 13], ['2023-Q2', 12], ['2023-Q3', 11]),
+      'NEUTRAL',
+    ],
+  ])('operating margins: %s', (_label, value, expected) => {
+    expect(withEquity((s) => void (s.fundamentals.operatingMarginPctQuarterly = value)).indicator).toBe(expected);
+  });
+
+  it('counts equal bulk/block buy and sell quantity as not net selling', () => {
+    const result = withEquity(
+      (s) =>
+        void (s.sentiment.bulkBlockDeals30d = ok(
+          [
+            { date: '2026-09-20', kind: 'BULK' as const, side: 'BUY' as const, quantity: 300, price: 105 },
+            { date: '2026-09-21', kind: 'BLOCK' as const, side: 'SELL' as const, quantity: 300, price: 104 },
+          ],
+          SRC_FLOWS,
+        )),
+    );
+    expect(codes(result.reasons)).toContain('DEALS_NOT_NET_SELLING');
+  });
+
+  it.each<[string, Mutation, string]>([
+    ['revenue growth 0%', (s) => void (s.fundamentals.revenueGrowthYoYPct = ok(0, SRC_FIN)), 'REVENUE_NOT_GROWING'],
+    ['net margin 0%', (s) => void (s.fundamentals.netMarginPct = ok(0, SRC_FIN)), 'NET_MARGIN_NOT_POSITIVE'],
+    [
+      'FII flow 0',
+      (s) => void (s.sentiment.fiiNetFlow = ok({ netInrCr: 0, lookbackDays: 30 }, SRC_FLOWS)),
+      'FII_NOT_NET_BUYING',
+    ],
+    [
+      'DII flow 0',
+      (s) => void (s.sentiment.diiNetFlow = ok({ netInrCr: 0, lookbackDays: 30 }, SRC_FLOWS)),
+      'DII_NOT_NET_BUYING',
+    ],
+  ])('%s fails its strict threshold', (_label, mutate, code) => {
+    expect(codes(withEquity(mutate).riskFactors)).toContain(code);
+  });
+
+  it.each<[string, number, 'BUY' | 'NEUTRAL']>([
+    ['derivatives 4 days old (limit)', 4, 'BUY'],
+    ['derivatives 4.01 days old', 4.01, 'NEUTRAL'],
+  ])('%s -> %s', (_label, days, expected) => {
+    expect(withFuture((s) => void (s.derivatives.inFnoBan = ok(false, SRC_FNO, daysBefore(days)))).indicator).toBe(
+      expected,
+    );
+  });
+
+  it.each<[number, boolean]>([
+    [10, true],
+    [10.01, false],
+  ])('sentiment %s days old usable: %s', (days, usable) => {
+    const result = withEquity(
+      (s) => void (s.sentiment.fiiNetFlow = ok({ netInrCr: 5, lookbackDays: 30 }, SRC_FLOWS, daysBefore(days))),
+    );
+    expect(codes(result.riskFactors).includes('FII_NET_BUYING_UNAVAILABLE')).toBe(!usable);
+  });
+});
+
+describe('evaluate: policy lookback windows (review finding 5)', () => {
+  it.each<[number, string]>([
+    [9, 'NEUTRAL'],
+    [10, 'DONT_BUY'],
+    [30, 'DONT_BUY'],
+    [31, 'NEUTRAL'],
+  ])('a BEARISH divergence over %s bars -> %s', (lookbackBars, expected) => {
+    const result = withEquity(
+      (s) => void (s.technicals.rsiDivergence = ok({ kind: 'BEARISH' as const, lookbackBars }, SRC_QUOTE)),
+    );
+    expect(result.indicator).toBe(expected);
+  });
+
+  it.each<[number, boolean]>([
+    [3, false],
+    [4, true],
+    [26, true],
+    [27, false],
+  ])('a breakout over a %s-week range is decidable: %s', (rangeWeeks, decidable) => {
+    const result = withEquity(
+      (s) => void (s.technicals.consolidationBreakout = ok({ brokeOutUp: true, rangeWeeks }, SRC_QUOTE)),
+    );
+    expect(codes(result.riskFactors).includes('CONSOLIDATION_BREAKOUT_UNAVAILABLE')).toBe(!decidable);
+  });
+});
+
+describe('evaluate: output details (review findings 2, 10)', () => {
+  it.each<[string, Mutation]>([
+    [
+      'support stop',
+      (s) => {
+        s.technicals.atr14 = ok(4, SRC_QUOTE);
+        s.technicals.ema50 = ok(105, SRC_QUOTE);
+      },
+    ],
+    [
+      'tiny ATR relative to the tick',
+      (s) => {
+        s.technicals.lastPrice = ok(10, SRC_QUOTE);
+        s.technicals.ema50 = ok(9, SRC_QUOTE);
+        s.technicals.ema20 = ok(9.5, SRC_QUOTE);
+        s.technicals.ema200 = ok(8, SRC_QUOTE);
+        s.technicals.atr14 = ok(0.013, SRC_QUOTE);
+      },
+    ],
+  ])('R:R for %s satisfies the shared schema', (_label, mutate) => {
+    const result = withEquity(mutate);
+    expect(result.riskReward).not.toBeNull();
+    expect(DecisionResult.safeParse(result).success).toBe(true);
+  });
+
+  it('documents that rounding can take the ratio below 2 for a tiny ATR', () => {
+    const result = withEquity((s) => {
+      s.technicals.lastPrice = ok(10, SRC_QUOTE);
+      s.technicals.atr14 = ok(0.013, SRC_QUOTE);
+    });
+    expect(result.riskReward).toMatchObject({ entry: 10, stop: 9.97, target: 10.05, ratio: 1.67 });
+  });
+
+  it('never shows a non-zero change as 0 in messages', () => {
+    const result = withFuture((s) => {
+      s.derivatives.priceChangePct = ok(0.001, SRC_FNO);
+      s.derivatives.oiChangePct = ok(0.004, SRC_FNO);
+      s.derivatives.basisPct = ok(-0.001, SRC_FNO);
+    });
+    expect(result.reasons.find((f) => f.code === 'LONG_BUILD_UP')?.message).toBe(
+      'Futures price <0.01%, OI <0.01%: long build-up.',
+    );
+    expect(result.riskFactors.find((f) => f.code === 'BASIS_NEGATIVE')?.message).toBe(
+      'Futures basis >-0.01% (backwardation).',
+    );
+  });
+
+  it.each<[number, string]>([
+    [0, '0'],
+    [-0, '0'],
+    [1.005, '1'],
+    [0.004, '<0.01'],
+    [-0.004, '>-0.01'],
+    [12.345, '12.35'],
+  ])('fmt(%s) = %s', (value, expected) => {
+    expect(fmt(value)).toBe(expected);
+  });
+});
+
+describe('evaluate: engine guards (review findings 7, 8)', () => {
+  it('binds checks to the policy version and rejects unknown versions', () => {
+    expect(checksFor(POLICY_V1)).toBe(CHECKS_V1);
+    const v9 = { ...POLICY_V1, version: 'v9' };
+    expect(() => checksFor(v9)).toThrow('No checks registered for policy version v9');
+    expect(() => evaluate(strongEquity(), v9, NOW)).toThrow('No checks registered');
+  });
+
+  it('freezes the v1 check set and each check', () => {
+    expect(Object.isFrozen(CHECKS_V1)).toBe(true);
+    expect(CHECKS_V1.every((c) => Object.isFrozen(c))).toBe(true);
+  });
+
+  it('rejects an invalid snapshot instead of deciding on it', () => {
+    const s = strongEquity();
+    s.asOf = '2026-09-30T10:00:00';
+    expect(() => evaluate(s, POLICY_V1, NOW)).toThrow();
+  });
+
+  it('rejects an invalid clock', () => {
+    expect(() => evaluate(strongEquity(), POLICY_V1, new Date('nope'))).toThrow(RangeError);
   });
 });
 
