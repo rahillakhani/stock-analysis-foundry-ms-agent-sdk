@@ -201,6 +201,141 @@ describe('aggregateResearch', () => {
   });
 });
 
+describe('aggregateResearch: review hardening', () => {
+  const ignoresSignal = (resolveAfterMs?: number) => () =>
+    new Promise<DimensionResult<Dimension>>((resolve) => {
+      if (resolveAfterMs !== undefined) {
+        const base = strongEquity();
+        setTimeout(() => resolve({ data: base.technicals, sources: base.sources.slice(0, 1) }), resolveAfterMs);
+      }
+    });
+
+  it('times out a provider that ignores its signal and never settles', async () => {
+    const hung = provider({ technicals: ignoresSignal() });
+    const result = await aggregateResearch(
+      hung,
+      equity,
+      AS_OF,
+      new AbortController().signal,
+      options({ timeoutMs: 20 }),
+    );
+    expect(result.unavailableDimensions).toEqual(['technicals']);
+    expect(result.snapshot.technicals.lastPrice).toMatchObject({ reason: 'provider timed out' });
+  });
+
+  it('discards data that arrives after the timeout', async () => {
+    const late = provider({ technicals: ignoresSignal(80) });
+    const result = await aggregateResearch(
+      late,
+      equity,
+      AS_OF,
+      new AbortController().signal,
+      options({ timeoutMs: 20 }),
+    );
+    expect(result.unavailableDimensions).toEqual(['technicals']);
+  });
+
+  it('cancels promptly even when the provider ignores its signal', async () => {
+    const controller = new AbortController();
+    const hung = provider({ fundamentals: ignoresSignal() });
+    const pending = aggregateResearch(hung, equity, AS_OF, controller.signal, options({ timeoutMs: 60_000 }));
+    controller.abort(new Error('user cancelled'));
+    await expect(pending).rejects.toThrow('user cancelled');
+  });
+
+  it('backs off exponentially with jitter across attempts', async () => {
+    const throttled = provider({ derivatives: () => Promise.reject(new RetryableProviderError('throttled')) });
+    const sleep = vi.fn(() => Promise.resolve());
+    const random = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(0.999);
+    await aggregateResearch(
+      throttled,
+      equity,
+      AS_OF,
+      new AbortController().signal,
+      options({ sleep, random, maxAttempts: 3 }),
+    );
+
+    expect(sleep.mock.calls.map((call: unknown[]) => call[0])).toEqual([10, 20 * (1 + 0.5 * 0.999)]);
+  });
+
+  it('downgrades a dimension that returns more sources than it has metrics', async () => {
+    const base = strongEquity();
+    const flood = Array.from({ length: 12 }, (_, i) => ({ id: `flood:${i}`, provider: 'x', retrievedAt: base.asOf }));
+    const noisy = provider({
+      sentiment: () => Promise.resolve({ data: base.sentiment, sources: [...base.sources, ...flood] }),
+    });
+    const result = await aggregateResearch(noisy, equity, AS_OF, new AbortController().signal, options());
+    expect(result.unavailableDimensions).toEqual(['sentiment']);
+    expect(result.snapshot.fundamentals.roePct.status).toBe('OK');
+  });
+
+  it('rejects duplicate source ids within one dimension', async () => {
+    const base = strongEquity();
+    const duplicated = provider({
+      fundamentals: () =>
+        Promise.resolve({
+          data: base.fundamentals,
+          sources: [base.sources[0]!, base.sources[0]!, base.sources[1]!],
+        }),
+    });
+    const result = await aggregateResearch(duplicated, equity, AS_OF, new AbortController().signal, options());
+    expect(result.unavailableDimensions).toEqual(['fundamentals']);
+  });
+
+  it('rejects a later dimension that redefines a shared source id with different content', async () => {
+    const base = strongEquity();
+    const spoofed = provider({
+      technicals: () =>
+        Promise.resolve({
+          data: base.technicals,
+          sources: [
+            { id: 'fixture:quote', provider: 'evil', url: 'https://evil.example.com/x', retrievedAt: base.asOf },
+          ],
+        }),
+    });
+    const result = await aggregateResearch(spoofed, equity, AS_OF, new AbortController().signal, options());
+
+    expect(result.unavailableDimensions).toEqual(['technicals']);
+    expect(result.snapshot.sources.find((s) => s.id === 'fixture:quote')).toMatchObject({ provider: 'fixture' });
+  });
+
+  it('drops the sources of a dimension downgraded for observing after asOf', async () => {
+    const base = strongEquity();
+    const late = '2026-09-30T10:00:00.001Z';
+    const future = provider({
+      sentiment: () =>
+        Promise.resolve({
+          data: {
+            ...base.sentiment,
+            fiiNetFlow: { ...base.sentiment.fiiNetFlow, sourceId: 'late:src', observedAt: late },
+          },
+          sources: [{ id: 'late:src', provider: 'x', retrievedAt: base.asOf }, base.sources[3]!],
+        } as DimensionResult<Dimension>),
+    });
+    const result = await aggregateResearch(future, equity, AS_OF, new AbortController().signal, options());
+
+    expect(result.unavailableDimensions).toEqual(['sentiment']);
+    expect(result.snapshot.sources.map((s) => s.id)).not.toContain('late:src');
+  });
+
+  it('downgrades several dimensions in one aggregation', async () => {
+    const both = provider({
+      fundamentals: () => Promise.reject(new Error('down')),
+      technicals: () => Promise.resolve({ data: { bogus: true }, sources: [] } as never),
+    });
+    const result = await aggregateResearch(both, equity, AS_OF, new AbortController().signal, options());
+    expect(result.unavailableDimensions).toEqual(['fundamentals', 'technicals']);
+  });
+
+  it("does not report a provider's own abort as our timeout", async () => {
+    const aborting = provider({
+      fundamentals: () => Promise.reject(Object.assign(new Error('inner abort'), { name: 'AbortError' })),
+    });
+    const result = await aggregateResearch(aborting, equity, AS_OF, new AbortController().signal, options());
+    expect(result.snapshot.fundamentals.roePct).toMatchObject({ reason: 'provider request failed' });
+  });
+});
+
 describe('DEFAULT_AGGREGATOR_OPTIONS.sleep', () => {
   it('resolves after the delay and rejects when aborted', async () => {
     await expect(DEFAULT_AGGREGATOR_OPTIONS.sleep(1, new AbortController().signal)).resolves.toBeUndefined();

@@ -39,7 +39,10 @@ export interface ResearchProvider {
   fetch<D extends Dimension>(dimension: D, instrument: Instrument, ctx: FetchContext): Promise<DimensionResult<D>>;
 }
 
-/** A provider failure worth retrying (timeouts of the upstream call, throttling, transient network errors). */
+/**
+ * Thrown by a provider for a transient upstream failure worth retrying (throttling, connection resets, an upstream
+ * gateway timeout). The aggregator's own per-attempt deadline is not retried.
+ */
 export class RetryableProviderError extends Error {
   override readonly name = 'RetryableProviderError';
 }

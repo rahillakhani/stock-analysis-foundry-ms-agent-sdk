@@ -24,14 +24,13 @@ const SECTION_SCHEMAS = {
   derivatives: Derivatives,
   sentiment: Sentiment,
 };
-const Sources = z.array(Source);
 
 export interface AggregatorOptions {
-  /** Per-attempt timeout for one dimension. */
+  /** Per-attempt timeout for one dimension. Enforced even if the provider ignores its signal. */
   timeoutMs: number;
   /** Total attempts per dimension for RetryableProviderError (1 = no retry). */
   maxAttempts: number;
-  /** Base backoff; attempt n waits base × 2^(n-1) plus up to 50% jitter. */
+  /** Base backoff; attempt n waits base × 2^(n-1) × (1 + 0.5 × random). */
   backoffMs: number;
   /** Injected for tests: returns a value in [0, 1). */
   random: () => number;
@@ -40,6 +39,9 @@ export interface AggregatorOptions {
   currency: string;
 }
 
+const abortReason = (signal: AbortSignal) =>
+  signal.reason instanceof Error ? signal.reason : new Error('operation aborted');
+
 export const DEFAULT_AGGREGATOR_OPTIONS: AggregatorOptions = {
   timeoutMs: 5_000,
   maxAttempts: 2,
@@ -47,15 +49,15 @@ export const DEFAULT_AGGREGATOR_OPTIONS: AggregatorOptions = {
   random: Math.random,
   sleep: (ms, signal) =>
     new Promise((resolve, reject) => {
-      const timer = setTimeout(resolve, ms);
-      signal.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timer);
-          reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
-        },
-        { once: true },
-      );
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(abortReason(signal));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal.addEventListener('abort', onAbort, { once: true });
     }),
   currency: 'INR',
 };
@@ -71,10 +73,15 @@ class InvalidProviderDataError extends Error {
   override readonly name = 'InvalidProviderDataError';
 }
 
+/** The aggregator's own per-attempt deadline passed (distinct from any abort raised inside the provider). */
+class ProviderTimeoutError extends Error {
+  override readonly name = 'ProviderTimeoutError';
+}
+
 /** Why a dimension failed, as an internal (never client-facing) reason. */
 function describeFailure(err: unknown): string {
   if (err instanceof z.ZodError || err instanceof InvalidProviderDataError) return 'provider returned invalid data';
-  if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) return 'provider timed out';
+  if (err instanceof ProviderTimeoutError) return 'provider timed out';
   return 'provider request failed';
 }
 
@@ -85,9 +92,38 @@ function erroredSection<D extends Dimension>(dimension: D, reason: string): Dime
 }
 
 /**
+ * Settles with `promise`, or rejects as soon as `signal` aborts, whichever comes first. This is what makes timeouts
+ * and cancellation hold even for a provider that ignores its signal; its late result is discarded.
+ */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
+interface DimensionOutcome {
+  dimension: Dimension;
+  data: DimensionData[Dimension];
+  sources: Source[];
+}
+
+/**
  * Collects all four research dimensions concurrently from one provider. Each dimension gets its own timeout and
- * bounded retries (RetryableProviderError only); a dimension that still fails becomes ERROR metrics and is listed
- * in `unavailableDimensions`. Cancelling `signal` rejects the whole aggregation.
+ * bounded retries (RetryableProviderError only); a dimension that still fails, or whose output is invalid or
+ * conflicts with another dimension's sources, becomes ERROR metrics and is listed in `unavailableDimensions`.
+ * Cancelling `signal` rejects the whole aggregation.
  */
 export async function aggregateResearch(
   provider: ResearchProvider,
@@ -96,57 +132,70 @@ export async function aggregateResearch(
   signal: AbortSignal,
   options: AggregatorOptions = DEFAULT_AGGREGATOR_OPTIONS,
 ): Promise<AggregatedResearch> {
-  const results = await Promise.all(
-    DIMENSIONS.map(async (dimension) => {
+  const fetched = await Promise.all(
+    DIMENSIONS.map(async (dimension): Promise<DimensionOutcome | { dimension: Dimension; reason: string }> => {
       try {
-        return {
-          dimension,
-          ok: true as const,
-          ...(await fetchWithRetry(provider, dimension, instrument, asOf, signal, options)),
-        };
+        return { dimension, ...(await fetchWithRetry(provider, dimension, instrument, asOf, signal, options)) };
       } catch (err) {
-        if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('aggregation cancelled');
-        return { dimension, ok: false as const, reason: describeFailure(err) };
+        if (signal.aborted) throw abortReason(signal);
+        return { dimension, reason: describeFailure(err) };
       }
     }),
   );
 
-  const sections: Partial<DimensionData> = {};
-  const sources = new Map<string, Source>();
-  const unavailableDimensions: Dimension[] = [];
-  for (const result of results) {
-    if (result.ok) {
-      Object.assign(sections, { [result.dimension]: result.data });
-      for (const source of result.sources) if (!sources.has(source.id)) sources.set(source.id, source);
-    } else {
-      Object.assign(sections, { [result.dimension]: erroredSection(result.dimension, result.reason) });
-      unavailableDimensions.push(result.dimension);
+  const accepted = new Map<Dimension, DimensionOutcome>();
+  const failed = new Map<Dimension, string>();
+  const claimed = new Map<string, string>(); // source id -> canonical JSON of the first dimension's source
+  for (const outcome of fetched) {
+    if ('reason' in outcome) {
+      failed.set(outcome.dimension, outcome.reason);
+      continue;
     }
+    // Two dimensions may share a source only if they describe it identically; otherwise the later one is rejected
+    // so no metric can end up pointing at another dimension's provenance.
+    const conflict = outcome.sources.some((source) => {
+      const existing = claimed.get(source.id);
+      return existing !== undefined && existing !== JSON.stringify(source);
+    });
+    if (conflict) {
+      failed.set(outcome.dimension, 'provider returned invalid data');
+      continue;
+    }
+    for (const source of outcome.sources) claimed.set(source.id, JSON.stringify(source));
+    accepted.set(outcome.dimension, outcome);
   }
 
-  const base = {
-    schemaVersion: RESEARCH_SNAPSHOT_SCHEMA_VERSION,
-    instrument,
-    currency: options.currency,
-    asOf: asOf.toISOString(),
-    sources: [...sources.values()],
-  };
-  // Snapshot-level invariants (cited sources exist, nothing observed after asOf, FUTURE derivatives present) can
-  // fail for one provider section; downgrade just the offending dimensions instead of failing the analysis.
+  // Snapshot-level invariants (nothing observed after asOf, FUTURE derivatives present) can still fail for one
+  // section; downgrade just the offending dimensions and rebuild sources from the survivors.
   for (;;) {
-    const parsed = ResearchSnapshot.safeParse({ ...base, ...sections });
-    if (parsed.success) return { snapshot: parsed.data, unavailableDimensions };
-    const offending = new Set(
-      parsed.error.issues
-        .map((issue) => issue.path[0])
-        .filter((key): key is Dimension => DIMENSIONS.includes(key as Dimension)),
+    const sections = Object.fromEntries(
+      DIMENSIONS.map((dimension) => {
+        const reason = failed.get(dimension);
+        const outcome = accepted.get(dimension);
+        return [dimension, outcome && reason === undefined ? outcome.data : erroredSection(dimension, reason ?? '')];
+      }),
     );
-    const fresh = [...offending].filter((dimension) => !unavailableDimensions.includes(dimension));
-    if (fresh.length === 0) throw parsed.error;
-    for (const dimension of fresh) {
-      Object.assign(sections, { [dimension]: erroredSection(dimension, 'provider returned invalid data') });
-      unavailableDimensions.push(dimension);
+    const sources = new Map<string, Source>();
+    for (const [dimension, outcome] of accepted) {
+      if (failed.has(dimension)) continue;
+      for (const source of outcome.sources) sources.set(source.id, source);
     }
+    const parsed = ResearchSnapshot.safeParse({
+      schemaVersion: RESEARCH_SNAPSHOT_SCHEMA_VERSION,
+      instrument,
+      currency: options.currency,
+      asOf: asOf.toISOString(),
+      ...sections,
+      sources: [...sources.values()],
+    });
+    const unavailableDimensions = DIMENSIONS.filter((dimension) => failed.has(dimension));
+    if (parsed.success) return { snapshot: parsed.data, unavailableDimensions };
+
+    const offending = parsed.error.issues
+      .map((issue) => issue.path[0])
+      .filter((key): key is Dimension => DIMENSIONS.includes(key as Dimension) && !failed.has(key as Dimension));
+    if (offending.length === 0) throw parsed.error; // not attributable to a provider section: a programming error
+    for (const dimension of offending) failed.set(dimension, 'provider returned invalid data');
   }
 }
 
@@ -158,12 +207,22 @@ async function fetchWithRetry<D extends Dimension>(
   signal: AbortSignal,
   options: AggregatorOptions,
 ): Promise<{ data: DimensionData[D]; sources: Source[] }> {
+  const schema = SECTION_SCHEMAS[dimension];
+  // Each metric cites at most one source, so a section never needs more sources than it has metrics.
+  const Sources = z
+    .array(Source)
+    .max(Object.keys(schema.shape).length)
+    .refine((list) => new Set(list.map((s) => s.id)).size === list.length, 'duplicate source ids');
+
   for (let attempt = 1; ; attempt++) {
     const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs)]);
     try {
-      const result = await provider.fetch(dimension, instrument, { asOf, signal: attemptSignal });
+      const result = await abortable(
+        provider.fetch(dimension, instrument, { asOf, signal: attemptSignal }),
+        attemptSignal,
+      );
       // Provider output is untrusted: validate the section and its sources before using them.
-      const data = SECTION_SCHEMAS[dimension].parse(result.data) as DimensionData[D];
+      const data = schema.parse(result.data) as DimensionData[D];
       const sources = Sources.parse(result.sources);
       // Each dimension must cite only the sources it returned, so its validity never depends on other dimensions.
       const returned = new Set(sources.map((source) => source.id));
@@ -174,8 +233,10 @@ async function fetchWithRetry<D extends Dimension>(
       if (unlisted) throw new InvalidProviderDataError(`${dimension} cites a source it did not return`);
       return { data, sources };
     } catch (err) {
-      const retryable = err instanceof RetryableProviderError;
-      if (signal.aborted || !retryable || attempt >= options.maxAttempts) throw err;
+      if (signal.aborted) throw err;
+      // Our own deadline passed: report it as a timeout. Not retried, so one slow provider can't multiply latency.
+      if (attemptSignal.aborted) throw new ProviderTimeoutError(`${dimension} timed out`);
+      if (!(err instanceof RetryableProviderError) || attempt >= options.maxAttempts) throw err;
       const delay = options.backoffMs * 2 ** (attempt - 1) * (1 + 0.5 * options.random());
       await options.sleep(delay, signal);
     }

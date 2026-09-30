@@ -56,8 +56,17 @@ describe('FixtureResearchProvider', () => {
 
     expect(itc.snapshot.derivatives.inFnoBan.status).toBe('NOT_APPLICABLE');
     expect(reliance.snapshot.derivatives.inFnoBan.status).toBe('OK');
-    expect(reliance.snapshot.derivatives.nearMonthExpiry.value).toBe('2026-09-29');
+    // The nearest contract still trading on 2026-09-30 (September's expired on the 29th).
+    expect(reliance.snapshot.derivatives.nearMonthExpiry.value).toBe('2026-10-27');
     expect(nifty.snapshot.fundamentals.roePct.status).toBe('MISSING');
+  });
+
+  it('gives stock futures company fundamentals and a contract price consistent with the futures data', async () => {
+    const future = await aggregateResearch(fixture, instrument('RELIANCE FUT'), AS_OF, signal());
+    expect(future.snapshot.fundamentals.roePct.status).toBe('OK');
+    expect(future.snapshot.technicals.lastPrice.value).toBe(future.snapshot.derivatives.futuresPrice.value);
+    const indexFuture = await aggregateResearch(fixture, instrument('NIFTY FUT'), AS_OF, signal());
+    expect(indexFuture.snapshot.fundamentals.roePct.status).toBe('MISSING');
   });
 
   it('uses the last three completed calendar quarters', async () => {

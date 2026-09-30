@@ -1,5 +1,6 @@
 import type { Instrument, Source } from '@stock-analysis/shared';
 import type { InstrumentMaster } from '../domain/instruments/instrumentMaster.ts';
+import { nearestLiveExpiry } from '../domain/instruments/resolveInstrument.ts';
 import type { Dimension, DimensionData, DimensionResult, FetchContext, ResearchProvider } from './researchProvider.ts';
 
 // SYNTHETIC sample data for local development and demos. Every value is generated from a seeded PRNG (symbol +
@@ -57,12 +58,18 @@ export class FixtureResearchProvider implements ResearchProvider {
     const source: Source = { id: sourceId, provider: PROVIDER, retrievedAt: observedAt };
     // Seed per symbol+dimension+day so dimensions vary independently but reproducibly.
     const random = prng(hash(`${instrument.exchange}:${instrument.symbol}:${dimension}:${day}`));
+    // Spot price and basis are shared by technicals and derivatives so futures data stays internally consistent.
+    const shared = prng(hash(`${instrument.exchange}:${instrument.symbol}:market:${day}`));
+    const spot = round2(80 + 3420 * shared());
+    const basisPct = round2(-0.3 + 1 * shared());
+    const futuresPrice = round2(spot * (1 + basisPct / 100));
+    const record = this.#master.all().find((r) => r.exchange === instrument.exchange && r.symbol === instrument.symbol);
     const ok = <T>(value: T) => ({ status: 'OK' as const, value, sourceId, observedAt });
     const between = (min: number, max: number) => round2(min + (max - min) * random());
 
     const sections: { [K in Dimension]: () => DimensionData[K] } = {
       fundamentals: () => {
-        if (instrument.assetType !== 'EQUITY') {
+        if (record?.assetType === 'INDEX' || instrument.assetType === 'INDEX') {
           // Indices and index futures have no company fundamentals.
           const missing = { status: 'MISSING' as const, value: null };
           return {
@@ -101,7 +108,8 @@ export class FixtureResearchProvider implements ResearchProvider {
         };
       },
       technicals: () => {
-        const price = between(80, 3500);
+        // For a FUTURE, the instrument's own traded price is the contract price.
+        const price = instrument.assetType === 'FUTURE' ? futuresPrice : spot;
         const ema50 = round2(price * (1 + between(-0.08, 0.08)));
         return {
           lastPrice: ok(price),
@@ -119,11 +127,11 @@ export class FixtureResearchProvider implements ResearchProvider {
         };
       },
       derivatives: () => {
-        const record = this.#master
-          .all()
-          .find((r) => r.exchange === instrument.exchange && r.symbol === instrument.symbol);
         const hasFno = instrument.assetType === 'FUTURE' || record?.futuresExpiries !== undefined;
-        const expiry = instrument.assetType === 'FUTURE' ? instrument.contract.expiry : record?.futuresExpiries?.[0];
+        const expiry =
+          instrument.assetType === 'FUTURE'
+            ? instrument.contract.expiry
+            : record?.futuresExpiries && nearestLiveExpiry(record.futuresExpiries, ctx.asOf);
         if (!hasFno || expiry === undefined) {
           const na = { status: 'NOT_APPLICABLE' as const, value: null };
           return {
@@ -135,10 +143,9 @@ export class FixtureResearchProvider implements ResearchProvider {
             inFnoBan: na,
           };
         }
-        const basisPct = between(-0.3, 0.7);
         return {
           nearMonthExpiry: ok(expiry),
-          futuresPrice: ok(between(80, 3500)),
+          futuresPrice: ok(futuresPrice),
           priceChangePct: ok(between(-2.5, 2.5)),
           oiChangePct: ok(between(-6, 9)),
           basisPct: ok(basisPct),
