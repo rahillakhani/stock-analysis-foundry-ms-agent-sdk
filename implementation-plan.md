@@ -320,8 +320,10 @@ Each item can be its own commit.
 | Validate spec and plan | Architect | Done | §1 (npm registry and repo checks, 2026-09-24) | User (decisions) |
 | Blocking decisions 1–3, assumptions A1–A5 | User | Open | — | Architect (Phase 0 ADR) |
 | Claude Code project setup | Implementer | Done | Commit `b215e05` (hooks tested with synthetic inputs) | — |
-| Phase 1: Workspace scaffold | Implementer | Done (CI not yet run on GitHub) | 2026-09-29: `npm install` (0 vulns); `format:check`, `lint`, `typecheck`, `test` all exit 0 (10 tests); a negative probe showed typecheck and lint fail on bad code | Tester / Phase 2 |
-| Phases 2–10 | Implementer | Not started. 2–5 are unblocked without Docker | — | Tester per phase |
+| Phase 1: Workspace scaffold | Implementer | Done, commit `30c7dc9` (CI not yet run on GitHub) | 2026-09-29: `npm install` (0 vulns); `format:check`, `lint`, `typecheck`, `test` all exit 0 (10 tests); a negative probe showed typecheck and lint fail on bad code | Phase 2 |
+| Phase 2: API skeleton | Implementer | Done (CI not yet run on GitHub) | 2026-09-30: gate + build all exit 0 (67 tests / 8 files); `npm ci` OK; dev served /healthz and 404 and reloaded on change; prod (`build` + `NODE_ENV=production npm start`) served /healthz; SIGTERM with a busy keep-alive request exited 0 in 319 ms; `import('@stock-analysis/shared')` from apps/api resolves `dist/` (the API doesn't import shared yet) | Phase 3 |
+| Phase 2 review | Reviewer (`code-reviewer` agent) | Done; findings 1–7, 9, 10 and the test gaps fixed with tests | Majors: request logs leaked headers, query strings and IPs (now an allowlist serializer); look-alike SDK errors were mapped to 4xx (now exact body-parser types only). Open: finding 8, the conditional exports have no in-app consumer until Phase 3; a stale `dist/` is possible if `npm start` runs without `npm run build` | Phase 3 |
+| Phases 3–10 | Implementer | Not started. 3–5 are unblocked without Docker | — | Tester per phase |
 | Phases 11–13 | Implementer | Blocked on decisions 1–2 | — | — |
 
 ## 4. Residual risks

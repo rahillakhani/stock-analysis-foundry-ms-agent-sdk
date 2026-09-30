@@ -7,9 +7,12 @@
     "apps/*"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.18.0"
   },
   "scripts": {
+    "dev": "npm run dev -w @stock-analysis/api",
+    "build": "npm run build --workspaces --if-present",
+    "start": "npm run start -w @stock-analysis/api",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
