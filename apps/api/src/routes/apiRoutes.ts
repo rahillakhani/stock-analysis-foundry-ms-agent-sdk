@@ -13,7 +13,8 @@ import { AppError } from '../http/errors.ts';
 import { parseRequest } from '../http/validate.ts';
 import type { AnalysisService } from '../services/analysisService.ts';
 
-const RunIdParams = z.object({ id: z.string().min(1).max(64) });
+/** Malformed ids are a client error (400); a well-formed id that doesn't exist is 404. */
+const RunIdParams = z.object({ id: z.uuid() });
 
 /**
  * /api/v1 routes. Thin: validate input with the shared schema, call the service, and parse the response with the

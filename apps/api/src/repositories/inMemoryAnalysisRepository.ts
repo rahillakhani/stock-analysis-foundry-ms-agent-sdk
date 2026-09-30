@@ -11,6 +11,7 @@ import {
   assertDimensionsMatchStatus,
   buildCompletedView,
   buildFailedView,
+  clampTimelineLimit,
   RunInFlightError,
   RunStateError,
   timelineSnapshot,
@@ -127,13 +128,12 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     return Promise.resolve(completed[0] ? structuredClone(completed[0]) : null);
   }
 
-  getTimeline(stockId: string): Promise<TimelineEntry[]> {
-    return Promise.resolve(
-      this.#timeline
-        .filter((t) => t.stockId === stockId)
-        .map((t) => structuredClone(t.entry))
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
-    );
+  getTimeline(stockId: string, limit?: number): Promise<TimelineEntry[]> {
+    const ordered = this.#timeline
+      .filter((t) => t.stockId === stockId)
+      .map((t) => structuredClone(t.entry))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    return Promise.resolve(ordered.slice(-clampTimelineLimit(limit)));
   }
 
   failInFlightRuns(failure: RunFailure): Promise<number> {

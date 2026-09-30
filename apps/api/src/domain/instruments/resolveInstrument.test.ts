@@ -56,6 +56,13 @@ describe('InstrumentResolver.resolve', () => {
     expect(keyOf(resolver.resolve(query))).toBe(expected);
   });
 
+  it.each(['NSE:NIFTY:FUT:2026-10-27', 'NSE:RELIANCE:FUT:2026-11-24'])(
+    'resolves the canonical futures key %s exactly (as picked from autocomplete)',
+    (key) => {
+      expect(keyOf(resolver.resolve(key))).toBe(key);
+    },
+  );
+
   it('builds a valid FUTURE instrument with contract details', () => {
     const resolution = resolver.resolve('Nifty 50 Futures');
     expect(resolution.status).toBe('RESOLVED');

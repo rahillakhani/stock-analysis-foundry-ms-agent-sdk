@@ -257,15 +257,102 @@ describe('POST /api/v1/stock/analyze validation', () => {
 });
 
 describe('GET /api/v1/analysis-runs/:id', () => {
-  it.each(['0b9c8f5e-1d2a-4c3b-9e8f-7a6b5c4d3e2f', 'not-a-uuid'])('returns 404 for %s', async (id) => {
+  it('returns 404 for a well-formed id that does not exist', async () => {
     const { app } = setup();
-    const res = await request(app).get(`/api/v1/analysis-runs/${id}`);
+    const res = await request(app).get('/api/v1/analysis-runs/0b9c8f5e-1d2a-4c3b-9e8f-7a6b5c4d3e2f');
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ detail: 'Analysis run not found.' });
+  });
+
+  it.each(['not-a-uuid', 'x'.repeat(65)])('returns 400 for the malformed id %s', async (id) => {
+    const { app } = setup();
+    const res = await request(app).get(`/api/v1/analysis-runs/${id}`);
+    expect(res.status).toBe(400);
+    // Validation messages never echo the submitted value (`instance` is the request path by definition).
+    expect(JSON.stringify((res.body as { errors: unknown[] }).errors)).not.toContain('xxxxxxxxxx');
+  });
+});
+
+describe('Phase 8 review hardening', () => {
+  const MINUTE = 60_000;
+
+  it('closes a stalled in-flight run it does not own, so the stock is not blocked', async () => {
+    const ctx = setup();
+    const stock = await ctx.repository.upsertStock({
+      exchange: 'NSE',
+      symbol: 'ITC',
+      name: 'ITC Ltd',
+      assetType: 'EQUITY',
+    });
+    const orphan = await ctx.repository.createRun(stock.id);
+
+    const recent = await request(ctx.app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NSE:ITC', force: true });
+    expect(recent.status).toBe(409);
+
+    ctx.clock.advance(11 * MINUTE);
+    const polled = AnalysisRunView.parse((await request(ctx.app).get(`/api/v1/analysis-runs/${orphan.id}`)).body);
+    expect(polled).toMatchObject({ status: 'FAILED', error: { code: 'STALLED' } });
+    await analyzeAndWait(ctx, 'NSE:ITC', true);
+  });
+
+  it('recovers a run whose failure could not be recorded once it goes stale', async () => {
+    const ctx = setup();
+    const originalFail = ctx.repository.failRun.bind(ctx.repository);
+    ctx.repository.markRunning = () => Promise.reject(new Error('db down'));
+    ctx.repository.failRun = () => Promise.reject(new Error('db still down'));
+    const accepted = await request(ctx.app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NSE:SBIN' });
+    await ctx.service.idle();
+    const runId = AnalyzeAccepted.parse(accepted.body).runId;
+    expect((await ctx.repository.getRun(runId))?.status).toBe('PENDING');
+
+    ctx.repository.failRun = originalFail;
+    ctx.clock.advance(11 * MINUTE);
+    const polled = AnalysisRunView.parse((await request(ctx.app).get(`/api/v1/analysis-runs/${runId}`)).body);
+    expect(polled).toMatchObject({ status: 'FAILED', error: { code: 'STALLED' } });
+  });
+
+  it('refuses new analyses once shutdown has begun', async () => {
+    const ctx = setup();
+    await ctx.service.shutdown();
+    const res = await request(ctx.app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NSE:TCS' });
+    expect(res.status).toBe(503);
+  });
+
+  it('reports a persistence error after an abort as a failure, not a cancellation', async () => {
+    const ctx = setup();
+    ctx.repository.completeRun = async () => {
+      void ctx.service.shutdown();
+      await Promise.resolve();
+      throw new Error('write failed');
+    };
+    const runId = await analyzeAndWait(ctx, 'NSE:TITAN');
+    expect(await ctx.repository.getRun(runId)).toMatchObject({ status: 'FAILED', error: { code: 'ANALYSIS_FAILED' } });
+  });
+
+  it('asks the repository for at most the contract limit of timeline entries', async () => {
+    const ctx = setup();
+    await analyzeAndWait(ctx, 'NSE:HDFCBANK');
+    const limits: (number | undefined)[] = [];
+    const original = ctx.repository.getTimeline.bind(ctx.repository);
+    ctx.repository.getTimeline = (stockId, limit) => {
+      limits.push(limit);
+      return original(stockId, limit);
+    };
+    await request(ctx.app).post('/api/v1/stock/lookup').send({ query: 'HDFCBANK' });
+    expect(limits).toEqual([500]);
   });
 });
 
 describe('GET /readyz', () => {
+  it('returns 503 quickly when the readiness check hangs', async () => {
+    const logger = pino({ level: 'silent' });
+    const hung = createApp({ logger, readiness: () => new Promise(() => undefined), readinessTimeoutMs: 20 });
+    const started = Date.now();
+    const res = await request(hung).get('/readyz');
+    expect(res.status).toBe(503);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
   it('is ready when the readiness check passes and 503 when it fails', async () => {
     const logger = pino({ level: 'silent' });
     expect((await request(createApp({ logger, readiness: () => Promise.resolve() })).get('/readyz')).status).toBe(200);

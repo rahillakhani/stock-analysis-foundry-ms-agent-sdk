@@ -23,6 +23,11 @@ describe('loadEnv', () => {
     expect(loadEnv({ STORAGE: 'memory' })).toMatchObject({ STORAGE: 'memory' });
   });
 
+  it('treats an empty DATABASE_URL as unset', () => {
+    expect(loadEnv({ STORAGE: 'memory', DATABASE_URL: '' }).DATABASE_URL).toBeUndefined();
+    expect(() => loadEnv({ DATABASE_URL: '' })).toThrow(/DATABASE_URL: is required/);
+  });
+
   it('rejects a non-postgres DATABASE_URL without echoing it', () => {
     const secret = 'mysql://root:hunter2@db/x';
     let message = '';

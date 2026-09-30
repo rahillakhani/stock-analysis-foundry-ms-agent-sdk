@@ -12,6 +12,7 @@ import {
   assertDimensionsMatchStatus,
   buildCompletedView,
   buildFailedView,
+  clampTimelineLimit,
   isUuid,
   RunInFlightError,
   RunStateError,
@@ -210,13 +211,14 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
     return updated.count;
   }
 
-  async getTimeline(stockId: string): Promise<TimelineEntryView[]> {
+  async getTimeline(stockId: string, limit?: number): Promise<TimelineEntryView[]> {
     if (!isUuid(stockId)) return [];
-    const entries = await this.#db.analysisTimeline.findMany({
+    const latest = await this.#db.analysisTimeline.findMany({
       where: { stockId },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: clampTimelineLimit(limit),
     });
-    return entries.map(toTimelineEntry);
+    return latest.reverse().map(toTimelineEntry);
   }
 }
 

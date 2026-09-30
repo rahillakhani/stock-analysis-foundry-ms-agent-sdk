@@ -17,6 +17,13 @@ export interface StockRecord {
   lastAnalysedAt: string | null;
 }
 
+/** Matches the LookupResponse contract cap: older entries are omitted from the view, never from storage. */
+export const TIMELINE_LIMIT = 500;
+
+export function clampTimelineLimit(limit: number | undefined): number {
+  return Math.min(TIMELINE_LIMIT, Math.max(1, Math.trunc(limit ?? TIMELINE_LIMIT)));
+}
+
 export type ResearchDimension = 'fundamentals' | 'technicals' | 'derivatives' | 'sentiment';
 
 /** Everything persisted when a run finishes with a decision. */
@@ -72,8 +79,8 @@ export interface AnalysisRepository {
   findInFlightRun(stockId: string): Promise<AnalysisRunView | null>;
   /** Latest SUCCEEDED/PARTIAL run: the "existing analysis" shown on lookup. */
   getLatestCompletedRun(stockId: string): Promise<AnalysisRunView | null>;
-  /** Oldest first. */
-  getTimeline(stockId: string): Promise<TimelineEntryView[]>;
+  /** The latest `limit` entries (default and maximum: TIMELINE_LIMIT), returned oldest first. */
+  getTimeline(stockId: string, limit?: number): Promise<TimelineEntryView[]>;
   /**
    * Marks every PENDING/RUNNING run FAILED. Called at startup: runs in flight when the process stopped can never
    * finish, and would otherwise block their stock (one in-flight run per stock). Returns the number failed.

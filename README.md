@@ -69,6 +69,8 @@ NODE_ENV=production HOST=0.0.0.0 PORT=3000 DATABASE_URL=postgresql://... npm sta
 - On `SIGTERM`/`SIGINT` the server stops accepting connections, cancels running analyses (recorded as cancelled),
   disconnects from the database, and exits; it force-exits after 10 seconds.
 - Invalid configuration exits with code 1 before listening, naming the variable but never printing its value.
+- Run **exactly one API process per database**: analyses execute in-process, and startup marks every in-flight run
+  as interrupted. Replicas need run ownership first (final hardening phase).
 - Docker images and compose are deferred to the final hardening phase.
 
 ### Configuration

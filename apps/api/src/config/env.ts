@@ -14,10 +14,14 @@ const EnvSchema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
     /** `postgres` (default) persists to DATABASE_URL; `memory` is an explicit opt-in for DB-less demos (data is lost on restart). */
     STORAGE: z.enum(['postgres', 'memory']).default('postgres'),
-    DATABASE_URL: z
-      .string()
-      .regex(/^postgres(ql)?:\/\/\S+$/, 'must be a postgresql:// connection URL')
-      .optional(),
+    // An empty value (e.g. `DATABASE_URL=` in .env) counts as unset.
+    DATABASE_URL: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z
+        .string()
+        .regex(/^postgres(ql)?:\/\/\S+$/, 'must be a postgresql:// connection URL')
+        .optional(),
+    ),
   })
   .superRefine((env, ctx) => {
     if (env.STORAGE === 'postgres' && env.DATABASE_URL === undefined) {

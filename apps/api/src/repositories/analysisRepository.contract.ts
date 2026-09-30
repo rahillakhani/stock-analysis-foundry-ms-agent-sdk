@@ -254,6 +254,19 @@ export function describeAnalysisRepositoryContract(
       expect(await repo.failInFlightRuns({ code: 'INTERRUPTED', message: 'x' })).toBe(1);
     });
 
+    it('returns only the latest timeline entries, oldest first, when limited', async () => {
+      const stock = await repo.upsertStock(TESTCO);
+      const runIds: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        clock.set(`2026-10-0${i + 1}T10:00:00.000Z`);
+        const run = await repo.createRun(stock.id);
+        await repo.completeRun(run.id, completed());
+        runIds.push(run.id);
+      }
+      expect((await repo.getTimeline(stock.id, 2)).map((t) => t.runId)).toEqual(runIds.slice(2));
+      expect((await repo.getTimeline(stock.id)).map((t) => t.runId)).toEqual(runIds);
+    });
+
     it('keeps timelines separate per stock', async () => {
       const a = await repo.upsertStock(TESTCO);
       const b = await repo.upsertStock(OTHERCO);

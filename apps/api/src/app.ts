@@ -12,17 +12,18 @@ export interface AppDeps {
   service?: AnalysisService;
   /** Resolves when dependencies are reachable; rejects otherwise. */
   readiness?: () => Promise<void>;
+  readinessTimeoutMs?: number;
 }
 
 /** Builds the Express app from injected dependencies. No listening, no env reads: tests call this directly. */
-export function createApp({ logger, service, readiness }: AppDeps): Express {
+export function createApp({ logger, service, readiness, readinessTimeoutMs }: AppDeps): Express {
   const app = express();
   app.disable('x-powered-by');
 
   app.use(requestContext(logger));
   app.use(express.json({ limit: '100kb' }));
 
-  app.use(healthRouter(readiness));
+  app.use(healthRouter(readiness, readinessTimeoutMs));
   if (service) app.use('/api/v1', apiRouter(service));
 
   app.use(notFoundHandler);

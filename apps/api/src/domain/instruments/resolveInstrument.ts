@@ -98,6 +98,10 @@ export class InstrumentResolver {
 
   /** Spec step 1: map a user query to exactly one instrument, several candidates, or nothing. */
   resolve(raw: string): Resolution {
+    // A canonical key (e.g. picked from autocomplete, including futures keys) resolves exactly.
+    const byKey = /^(NSE|BSE):/.test(raw) ? this.byKey(raw.trim()) : undefined;
+    if (byKey) return { status: 'RESOLVED', instrument: byKey };
+
     const query = this.#parse(raw);
     if (query === undefined) return { status: 'NOT_FOUND' };
 
