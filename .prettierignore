@@ -1,0 +1,5 @@
+# Markdown is hand-authored (specs, plans, rules, skills); don't reflow it.
+*.md
+package-lock.json
+coverage
+dist

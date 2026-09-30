@@ -8,11 +8,17 @@ import { relative } from 'node:path';
 const SECRET_PATTERNS = [
   { name: 'private key block', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
   { name: 'Azure storage connection string', re: /AccountKey=[A-Za-z0-9+/=]{40,}/ },
-  { name: 'Azure/OpenAI-style API key assignment', re: /(api[_-]?key|subscription[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9]{32,}/i },
+  {
+    name: 'Azure/OpenAI-style API key assignment',
+    re: /(api[_-]?key|subscription[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9]{32,}/i,
+  },
   { name: 'AWS access key id', re: /\bAKIA[0-9A-Z]{16}\b/ },
   { name: 'GitHub token', re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/ },
   { name: 'OpenAI-style secret key', re: /\bsk-[A-Za-z0-9_-]{32,}\b/ },
-  { name: 'Postgres URL with inline password', re: /postgres(?:ql)?:\/\/[^:\s/]+:(?!password@|postgres@|test@|\$\{)[^@\s]{8,}@/i },
+  {
+    name: 'Postgres URL with inline password',
+    re: /postgres(?:ql)?:\/\/[^:\s/]+:(?!password@|postgres@|test@|\$\{)[^@\s]{8,}@/i,
+  },
 ];
 
 function block(reason) {
