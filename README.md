@@ -4,9 +4,9 @@ AI stock and futures research engine: a deterministic TypeScript decision engine
 Azure OpenAI explanations. See `requirements.md` for the spec, `implementation-plan.md` for the phased plan and
 progress ledger, and `docs/decision-policy-v1.md` for exactly how BUY / DON'T BUY / NEUTRAL is decided.
 
-> **Status: API complete for the MVP (Phases 1–8).** Search, lookup, background analysis, and the timeline work
-> against PostgreSQL. **All research data is synthetic sample data** (no market-data provider is connected yet), so
-> verdicts are for trying the app, not for investing. The web UI arrives in Phase 9.
+> **Status: MVP usable end to end (Phases 1–9).** Search, the "existing analysis" prompt, background analysis, and
+> the decision timeline work in the browser against PostgreSQL. **All research data is synthetic sample data** (no
+> market-data provider is connected yet), so verdicts are for trying the app, not for investing.
 
 ## Prerequisites
 
@@ -35,9 +35,18 @@ With a local Homebrew Postgres the URL is usually `postgresql://<your-macOS-user
 
 ## Development
 
+Run the API and the web UI in two terminals:
+
 ```sh
-npm run dev
+npm run dev        # API on http://127.0.0.1:3000
+npm run dev:web    # UI on http://localhost:5173 (proxies /api to the API)
 ```
+
+Open **http://localhost:5173**, type a symbol or company name (e.g. `Tata Steel`, `INFY`, `Nifty 50 Futures`), and
+press **Analyse**. A new stock is analysed immediately; for one analysed before, you're asked whether to view the
+existing analysis or run a fresh re-analysis.
+
+API details:
 
 - Starts the API from TypeScript source with no build step, restarting when a source file changes.
 - Reads `apps/api/.env`. Listens on `http://127.0.0.1:3000` (`PORT` / `HOST` to change).
@@ -60,7 +69,7 @@ curl http://127.0.0.1:3000/api/v1/analysis-runs/<runId from the previous respons
 
 ```sh
 npm ci
-npm run build                                   # generates the Prisma client, compiles to dist/
+npm run build                                   # Prisma client + API to dist/, UI to apps/web/dist/
 npm run db:deploy -w @stock-analysis/api        # apply pending migrations
 NODE_ENV=production HOST=0.0.0.0 PORT=3000 DATABASE_URL=postgresql://... npm start
 ```
@@ -126,7 +135,7 @@ requests. Postgres integration tests run locally until CI gains a database (defe
 | `apps/api/src/repositories`     | persistence port with Prisma (Postgres) and in-memory implementations   |
 | `apps/api/src/services`         | analysis orchestration (lookup, background runs)                         |
 | `apps/api/prisma`               | schema and migrations                                                    |
-| `apps/web`                      | Vite React frontend (Phase 9)                                            |
+| `apps/web`                      | Vite + React 19 + Tailwind 4 UI (search, re-analysis prompt, results)    |
 
 ## Notes
 

@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+
+/* Design tokens. Status colours follow the dataviz status palette hues, darkened for text contrast on solid fills;
+   status is always paired with an icon and a label, never colour alone. */
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb;
+  --surface-2: #f3f3f1;
+  --border: #e3e2de;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #6b6a64;
+  --series-1: #2a78d6;
+  --focus: #2a78d6;
+  --buy-bg: #0b6b0b;
+  --buy-fg: #ffffff;
+  --dontbuy-bg: #a32626;
+  --dontbuy-fg: #ffffff;
+  --neutral-bg: #fab219;
+  --neutral-fg: #1a1a19;
+  --warning-tint: #fff4dc;
+  --critical-tint: #fbe9e9;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --surface-2: #262624;
+    --border: #3a3a37;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #a3a298;
+    --series-1: #3987e5;
+    --focus: #3987e5;
+    --warning-tint: #3a2e10;
+    --critical-tint: #3b1a1a;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface: #1a1a19;
+  --surface-2: #262624;
+  --border: #3a3a37;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #a3a298;
+  --series-1: #3987e5;
+  --focus: #3987e5;
+  --warning-tint: #3a2e10;
+  --critical-tint: #3b1a1a;
+}
+
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-ink: var(--text-primary);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-muted);
+  --color-series-1: var(--series-1);
+  --color-focus: var(--focus);
+  --color-buy: var(--buy-bg);
+  --color-buy-fg: var(--buy-fg);
+  --color-dontbuy: var(--dontbuy-bg);
+  --color-dontbuy-fg: var(--dontbuy-fg);
+  --color-neutral: var(--neutral-bg);
+  --color-neutral-fg: var(--neutral-fg);
+  --color-warning-tint: var(--warning-tint);
+  --color-critical-tint: var(--critical-tint);
+}
+
+body {
+  background: var(--surface);
+  color: var(--text-primary);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
