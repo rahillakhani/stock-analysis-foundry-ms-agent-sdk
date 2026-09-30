@@ -180,6 +180,10 @@ describe('LookupResponse', () => {
     expect(messagesOf(LookupResponse, { ...resolved, existing })).toEqual([]);
   });
 
+  it('accepts a single-candidate AMBIGUOUS ("did you mean …?")', () => {
+    expect(LookupResponse.safeParse({ status: 'AMBIGUOUS', candidates: [candidate] }).success).toBe(true);
+  });
+
   it('accepts NOT_FOUND and multi-candidate AMBIGUOUS', () => {
     expect(LookupResponse.safeParse({ status: 'NOT_FOUND' }).success).toBe(true);
     const other = { ...candidate, key: 'BSE:TATASTEEL', exchange: 'BSE' };
@@ -192,7 +196,7 @@ describe('LookupResponse', () => {
       { ...resolved, existing: { ...existing, promptReanalysis: false } },
     ],
     ['negative age', { ...resolved, existing: { ...existing, ageSeconds: -1 } }],
-    ['ambiguous result with a single candidate', { status: 'AMBIGUOUS', candidates: [candidate] }],
+    ['ambiguous result with no candidates', { status: 'AMBIGUOUS', candidates: [] }],
   ])('rejects %s', (_label, input) => {
     expect(LookupResponse.safeParse(input).success).toBe(false);
   });

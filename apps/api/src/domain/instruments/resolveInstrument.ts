@@ -1,6 +1,11 @@
 import type { Exchange, Instrument } from '@stock-analysis/shared';
 import type { InstrumentMaster, InstrumentRecord } from './instrumentMaster.ts';
 
+/**
+ * RESOLVED only for an exact symbol, key, name, or alias match. Partial input never auto-resolves: its matches come
+ * back as AMBIGUOUS candidates (possibly just one) for the user to confirm, because resolving "hdfc" or "w" to a
+ * single company would cache an analysis under the wrong instrument.
+ */
 export type Resolution =
   | { status: 'RESOLVED'; instrument: Instrument }
   | { status: 'AMBIGUOUS'; candidates: Instrument[] }
@@ -8,6 +13,9 @@ export type Resolution =
 
 const DEFAULT_EXCHANGE: Exchange = 'NSE';
 const MAX_CANDIDATES = 20;
+const MAX_SEARCH_LIMIT = 20;
+/** Matches the API's QueryText cap; longer input can't be a symbol or company name. */
+const MAX_QUERY_LENGTH = 100;
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 /** Monthly contracts trade until the 15:30 IST close on their expiry day. */
 const EXPIRY_CUTOFF_MINUTES_IST = 15 * 60 + 30;
@@ -21,6 +29,8 @@ interface ParsedQuery {
   text: string;
   exchange: Exchange | undefined;
   wantsFutures: boolean;
+  /** Prefix and suffix name different exchanges (e.g. "BSE:RELIANCE.NS"): the query can't be trusted. */
+  conflictingExchange: boolean;
 }
 
 /**
@@ -28,24 +38,29 @@ interface ParsedQuery {
  * The input is only ever compared against the master list; it is never executed or interpolated anywhere.
  */
 export function parseQuery(raw: string): ParsedQuery {
-  let text = raw.normalize('NFKC').trim().replace(/\s+/g, ' ').toUpperCase();
-  let exchange: Exchange | undefined;
+  const words = raw.normalize('NFKC').trim().replace(/\s+/g, ' ').toUpperCase().split(' ').filter(Boolean);
 
+  // Futures intent only as a trailing word ("Nifty 50 Futures", "TATASTEEL.NS FUT"), so company names that contain
+  // "Future" (e.g. "Future Retail") are not misread as a futures request.
+  const wantsFutures = words.length > 1 && FUTURES_WORDS.has(words[words.length - 1] ?? '');
+  let text = (wantsFutures ? words.slice(0, -1) : words).join(' ');
+
+  let prefixExchange: Exchange | undefined;
   const prefix = /^(NSE|BSE)\s*:\s*/.exec(text);
   if (prefix?.[1]) {
-    exchange = prefix[1] as Exchange;
+    prefixExchange = prefix[1] as Exchange;
     text = text.slice(prefix[0].length);
   }
+  let suffixExchange: Exchange | undefined;
   const suffix = /\.(NS|NSE|BO|BSE)$/.exec(text);
   if (suffix?.[1]) {
-    exchange ??= EXCHANGE_SUFFIXES[suffix[1]];
+    suffixExchange = EXCHANGE_SUFFIXES[suffix[1]];
     text = text.slice(0, -suffix[0].length);
   }
 
-  const words = text.split(' ').filter((word) => word.length > 0);
-  const wantsFutures = words.some((word) => FUTURES_WORDS.has(word));
-  text = words.filter((word) => !FUTURES_WORDS.has(word)).join(' ');
-  return { text, exchange, wantsFutures };
+  const conflictingExchange =
+    prefixExchange !== undefined && suffixExchange !== undefined && prefixExchange !== suffixExchange;
+  return { text: text.trim(), exchange: prefixExchange ?? suffixExchange, wantsFutures, conflictingExchange };
 }
 
 /** Case-, punctuation-, and suffix-insensitive form for comparing names ("Tata Steel Ltd." == "tata steel"). */
@@ -83,30 +98,32 @@ export class InstrumentResolver {
 
   /** Spec step 1: map a user query to exactly one instrument, several candidates, or nothing. */
   resolve(raw: string): Resolution {
-    const query = parseQuery(raw);
-    if (query.text.length === 0) return { status: 'NOT_FOUND' };
+    const query = this.#parse(raw);
+    if (query === undefined) return { status: 'NOT_FOUND' };
 
-    const exact = this.#exactMatches(query);
-    const matches = exact.length > 0 ? exact : this.#fuzzyMatches(query);
-    const instruments = this.#toInstruments(matches, query.wantsFutures);
+    const exact = this.#toInstruments(this.#exactMatches(query), query.wantsFutures);
+    if (exact.length === 1) return { status: 'RESOLVED', instrument: exact[0]! };
+    if (exact.length > 1) return { status: 'AMBIGUOUS', candidates: exact.slice(0, MAX_CANDIDATES) };
 
-    if (instruments.length === 0) return { status: 'NOT_FOUND' };
-    if (instruments.length === 1) return { status: 'RESOLVED', instrument: instruments[0]! };
-    return { status: 'AMBIGUOUS', candidates: instruments.slice(0, MAX_CANDIDATES) };
+    const suggestions = this.#toInstruments(this.#rankedFuzzyMatches(query), query.wantsFutures);
+    return suggestions.length === 0
+      ? { status: 'NOT_FOUND' }
+      : { status: 'AMBIGUOUS', candidates: suggestions.slice(0, MAX_CANDIDATES) };
   }
 
   /** Autocomplete: ranked candidates for partial input (exact, symbol prefix, then name/alias word prefix). */
   search(raw: string, limit = 10): Instrument[] {
+    const query = this.#parse(raw);
+    if (query === undefined) return [];
+    const safeLimit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, Math.trunc(Number.isFinite(limit) ? limit : 10)));
+    return this.#toInstruments(this.#rankedFuzzyMatches(query), query.wantsFutures).slice(0, safeLimit);
+  }
+
+  /** undefined when the query can't identify anything: empty, oversized, or with conflicting exchanges. */
+  #parse(raw: string): ParsedQuery | undefined {
+    if (raw.length > MAX_QUERY_LENGTH) return undefined;
     const query = parseQuery(raw);
-    if (query.text.length === 0) return [];
-    const ranked = preferDefaultExchange([...this.#candidates(query)], query.exchange)
-      .map((record) => ({ record, rank: rankMatch(record, query) }))
-      .filter((entry): entry is { record: InstrumentRecord; rank: number } => entry.rank !== undefined)
-      .sort((a, b) => a.rank - b.rank || a.record.symbol.localeCompare(b.record.symbol));
-    return this.#toInstruments(
-      ranked.map((entry) => entry.record),
-      query.wantsFutures,
-    ).slice(0, limit);
+    return query.text.length === 0 || query.conflictingExchange ? undefined : query;
   }
 
   #candidates(query: ParsedQuery): readonly InstrumentRecord[] {
@@ -126,9 +143,13 @@ export class InstrumentResolver {
     return preferDefaultExchange(matches, query.exchange);
   }
 
-  #fuzzyMatches(query: ParsedQuery): InstrumentRecord[] {
-    const matches = this.#candidates(query).filter((record) => rankMatch(record, query) !== undefined);
-    return preferDefaultExchange(matches, query.exchange);
+  /** Partial matches, best first: exact, symbol prefix, then name/alias word prefix; ties by symbol. */
+  #rankedFuzzyMatches(query: ParsedQuery): InstrumentRecord[] {
+    return preferDefaultExchange([...this.#candidates(query)], query.exchange)
+      .map((record) => ({ record, rank: rankMatch(record, query) }))
+      .filter((entry): entry is { record: InstrumentRecord; rank: number } => entry.rank !== undefined)
+      .sort((a, b) => a.rank - b.rank || a.record.symbol.localeCompare(b.record.symbol))
+      .map((entry) => entry.record);
   }
 
   #toInstruments(records: readonly InstrumentRecord[], wantsFutures: boolean): Instrument[] {
@@ -171,7 +192,11 @@ function rankMatch(record: InstrumentRecord, query: ParsedQuery): number | undef
   return undefined;
 }
 
-/** When the user named no exchange and a symbol is dual-listed, keep only the default-exchange listing. */
+/**
+ * When the user named no exchange and a symbol is dual-listed, keep only the default-exchange listing.
+ * Matches by symbol, which holds for the fixture; a real master where BSE uses scrip codes needs an ISIN-based
+ * match instead (Phase 12).
+ */
 function preferDefaultExchange(records: InstrumentRecord[], explicit: Exchange | undefined): InstrumentRecord[] {
   if (explicit) return records;
   const onDefault = new Set(records.filter((r) => r.exchange === DEFAULT_EXCHANGE).map((r) => r.symbol));

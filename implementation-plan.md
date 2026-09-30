@@ -164,7 +164,7 @@ The goal is a runnable app with working search before any production-readiness w
 
 ### Phase 4: Query normalization
 - **Scope:**
-  - `apps/api/src/domain/normalize.ts` implements a resolver over an `InstrumentMaster` interface.
+  - `apps/api/src/domain/instruments/resolveInstrument.ts` implements a resolver over an `InstrumentMaster` interface.
   - A fixture master (about 30 NSE/BSE names plus aliases, e.g. "Tata Steel" → `NSE:TATASTEEL`, and "Nifty 50
     Futures" → `NSE:NIFTY` FUTURE, nearest expiry, with an injected clock).
   - Returns `RESOLVED | AMBIGUOUS(candidates) | NOT_FOUND`.

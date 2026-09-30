@@ -154,7 +154,8 @@ export type LookupRequest = z.infer<typeof LookupRequest>;
 export const LookupResponse = z
   .discriminatedUnion('status', [
     z.object({ status: z.literal('NOT_FOUND') }),
-    z.object({ status: z.literal('AMBIGUOUS'), candidates: z.array(InstrumentSummary).min(2).max(20) }),
+    /** Candidates for the user to pick from; a single candidate means "did you mean …?" for partial input. */
+    z.object({ status: z.literal('AMBIGUOUS'), candidates: z.array(InstrumentSummary).min(1).max(20) }),
     z.object({
       status: z.literal('RESOLVED'),
       instrument: Instrument,
