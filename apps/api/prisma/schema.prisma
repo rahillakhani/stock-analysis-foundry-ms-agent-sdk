@@ -1,0 +1,106 @@
+// Persistence for stocks, analysis runs, and the per-stock timeline (requirements.md §3, extended per
+// implementation-plan.md Phase 6). JSON columns hold shared Zod contracts and are validated on read.
+// Constraints Prisma can't express (one in-flight run per stock, status/field consistency) are raw SQL in the
+// migrations.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AssetType {
+  EQUITY
+  FUTURE
+  INDEX
+}
+
+enum DecisionIndicator {
+  BUY
+  DONT_BUY
+  NEUTRAL
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+enum TimelineEventType {
+  INITIAL_RESEARCH
+  RE_ANALYSIS
+}
+
+/// One row per instrument key: an equity/index, or a single futures contract (the expiry is part of the key).
+model Stock {
+  id              String             @id @default(uuid()) @db.Uuid
+  /// Canonical key, e.g. NSE:TATASTEEL or NSE:NIFTY:FUT:2026-10-27.
+  instrumentKey   String             @unique
+  ticker          String
+  companyName     String
+  exchange        String
+  assetType       AssetType
+  /// The shared Instrument contract.
+  instrument      Json
+  lastAnalysedAt  DateTime?          @db.Timestamptz(3)
+  createdAt       DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime           @updatedAt @db.Timestamptz(3)
+  analysisRuns    AnalysisRun[]
+  timelineRecords AnalysisTimeline[]
+
+  @@index([companyName])
+}
+
+model AnalysisRun {
+  id                    String             @id @default(uuid()) @db.Uuid
+  stockId               String             @db.Uuid
+  stock                 Stock              @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  status                RunStatus          @default(PENDING)
+  startedAt             DateTime           @default(now()) @db.Timestamptz(3)
+  completedAt           DateTime?          @db.Timestamptz(3)
+  policyVersion         String?
+  /// Columns duplicated from `decision` for listing and timeline queries; written from the same object.
+  decisionIndicator     DecisionIndicator?
+  confidenceScore       Float?
+  fundamentalScore      Float?
+  technicalScore        Float?
+  derivativesScore      Float?
+  sentimentScore        Float?
+  /// Full shared DecisionResult (reasons, risk factors, risk-to-reward).
+  decision              Json?
+  /// Shared Explanation (AVAILABLE with summary and citations, or UNAVAILABLE).
+  explanation           Json?
+  /// The ResearchSnapshot the decision was made from, kept to reproduce the run.
+  researchSnapshot      Json?
+  sources               Json?
+  unavailableDimensions String[]           @default([])
+  /// Client-safe { code, message } for FAILED runs.
+  error                 Json?
+  timelineRecords       AnalysisTimeline[]
+
+  @@unique([id, stockId])
+  @@index([stockId, startedAt(sort: Desc)])
+}
+
+/// One timestamped entry per completed run. The composite foreign key keeps an entry on the same stock as its run.
+model AnalysisTimeline {
+  id            String            @id @default(uuid()) @db.Uuid
+  stockId       String            @db.Uuid
+  stock         Stock             @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  analysisRunId String            @unique @db.Uuid
+  analysisRun   AnalysisRun       @relation(fields: [analysisRunId, stockId], references: [id, stockId], onDelete: Cascade)
+  eventType     TimelineEventType
+  /// Compact snapshot for the timeline view (indicator, confidence, policy version).
+  snapshotData  Json
+  createdAt     DateTime          @default(now()) @db.Timestamptz(3)
+
+  @@index([stockId, createdAt])
+}

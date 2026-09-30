@@ -1,0 +1,94 @@
+import type {
+  AnalysisRunView,
+  DecisionResult,
+  Explanation,
+  Instrument,
+  ResearchSnapshot,
+  Source,
+  TimelineEntryView,
+} from '@stock-analysis/shared';
+
+export interface StockRecord {
+  id: string;
+  instrumentKey: string;
+  instrument: Instrument;
+  /** ISO timestamp of the latest completed run, or null if never analysed. */
+  lastAnalysedAt: string | null;
+}
+
+export type ResearchDimension = 'fundamentals' | 'technicals' | 'derivatives' | 'sentiment';
+
+/** Everything persisted when a run finishes with a decision. */
+export interface CompletedRunInput {
+  status: 'SUCCEEDED' | 'PARTIAL';
+  decision: DecisionResult;
+  explanation: Explanation;
+  snapshot: ResearchSnapshot;
+  sources: Source[];
+  /** Must be non-empty for PARTIAL and empty for SUCCEEDED. */
+  unavailableDimensions: ResearchDimension[];
+}
+
+/** Client-safe failure summary; never provider or stack detail. */
+export interface RunFailure {
+  code: string;
+  message: string;
+}
+
+/** A second analysis was requested while one is PENDING/RUNNING for the same stock. */
+export class RunInFlightError extends Error {
+  override readonly name = 'RunInFlightError';
+  readonly runId: string;
+
+  constructor(runId: string) {
+    super(`An analysis run is already in flight: ${runId}`);
+    this.runId = runId;
+  }
+}
+
+/** The run doesn't exist or is not in a state that allows the requested transition. */
+export class RunStateError extends Error {
+  override readonly name = 'RunStateError';
+}
+
+/**
+ * Persistence port for stocks, runs, and the timeline. Implemented by Prisma (Postgres) and an in-memory store;
+ * both must pass the shared contract suite in analysisRepository.contract.ts.
+ *
+ * Run lifecycle: createRun -> PENDING -> markRunning -> RUNNING -> completeRun (SUCCEEDED/PARTIAL) or failRun
+ * (FAILED). Completing a run appends one timeline entry and updates the stock's lastAnalysedAt atomically.
+ */
+export interface AnalysisRepository {
+  /** Creates the stock on first sight, or refreshes its stored instrument; keyed by instrument key. */
+  upsertStock(instrument: Instrument): Promise<StockRecord>;
+  findStockByKey(instrumentKey: string): Promise<StockRecord | null>;
+  /** Throws RunInFlightError if the stock already has a PENDING/RUNNING run. */
+  createRun(stockId: string): Promise<AnalysisRunView>;
+  markRunning(runId: string): Promise<AnalysisRunView>;
+  completeRun(runId: string, input: CompletedRunInput): Promise<AnalysisRunView>;
+  failRun(runId: string, failure: RunFailure): Promise<AnalysisRunView>;
+  getRun(runId: string): Promise<AnalysisRunView | null>;
+  findInFlightRun(stockId: string): Promise<AnalysisRunView | null>;
+  /** Latest SUCCEEDED/PARTIAL run: the "existing analysis" shown on lookup. */
+  getLatestCompletedRun(stockId: string): Promise<AnalysisRunView | null>;
+  /** Oldest first. */
+  getTimeline(stockId: string): Promise<TimelineEntryView[]>;
+}
+
+/** The compact data stored in a timeline entry. */
+export function timelineSnapshot(decision: DecisionResult) {
+  return {
+    indicator: decision.indicator,
+    confidenceScore: decision.confidenceScore,
+    policyVersion: decision.policyVersion,
+  };
+}
+
+export function assertDimensionsMatchStatus(input: CompletedRunInput): void {
+  const partial = input.status === 'PARTIAL';
+  if (partial !== input.unavailableDimensions.length > 0) {
+    throw new RunStateError(
+      partial ? 'PARTIAL runs must name unavailable dimensions' : 'SUCCEEDED runs cannot have unavailable dimensions',
+    );
+  }
+}

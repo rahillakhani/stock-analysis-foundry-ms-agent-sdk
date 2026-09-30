@@ -3,3 +3,4 @@
 package-lock.json
 coverage
 dist
+apps/api/src/generated

@@ -342,7 +342,8 @@ Each item can be its own commit.
 | Phase 4 review | Reviewer | Done; major (a single fuzzy match auto-resolved) and minors fixed | Open: NSE preference by symbol needs an ISIN match for a real master (Phase 12) | — |
 | Phase 5: Decision engine | Implementer | Done: `54e9195` plus review fixes | 2026-09-30: gate exit 0; 109 engine tests; `domain/decision` coverage 100% statements and branches (141/141) | Phase 6 |
 | Phase 5 review | Reviewer | Done; major (a partial NOT_APPLICABLE dropped BUY criteria and vetoes, giving BUY at confidence 100) fixed fail-closed; minors fixed | Pre-release v1 correction recorded in the policy doc changelog. Known v1 limit: indices are at best NEUTRAL | — |
-| Phases 6–9 | Implementer | Not started; local Postgres (see execution order change) | — | Tester per phase |
+| Phase 6: Persistence | Implementer | Done, pending review | 2026-09-30: Prisma 7.10 with the pg adapter; migration `init` plus raw-SQL constraints (one in-flight run per stock, status/field CHECKs, score ranges, completedAt ≥ startedAt); applied to local `stock_analysis` and `stock_analysis_test`. Repository contract suite: in-memory 11 pass (`npm test`), Postgres 20 pass (`npm run test:int`, **local only, not in CI**). Gate exit 0 (426 tests) | Review, then Phase 7 |
+| Phases 7–9 | Implementer | Not started | — | Tester per phase |
 | Phases 11–13 | Implementer | Blocked on decisions 1–2 | — | — |
 
 ## 4. Residual risks
