@@ -48,8 +48,8 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs }: Props) 
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-ink">Stock &amp; Futures Research</h1>
         <p className="text-sm text-ink-2">
-          Search an NSE/BSE stock, index, or futures contract to see a rule-based BUY / DON&apos;T BUY / NEUTRAL signal
-          with its reasons.
+          Search any NSE, BSE, NASDAQ, or NYSE stock (or an NSE index or futures contract) to see a rule-based BUY /
+          DON&apos;T BUY / NEUTRAL signal with its reasons.
         </p>
       </header>
 

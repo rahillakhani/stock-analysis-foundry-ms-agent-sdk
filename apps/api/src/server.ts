@@ -1,7 +1,8 @@
 import { createApp } from './app.ts';
 import { EnvValidationError, loadEnv, type Env } from './config/env.ts';
 import { createPrismaClient } from './db/prisma.ts';
-import { POLICY_V1 } from './domain/decision/policy.ts';
+import { POLICY_V2 } from './domain/decision/policy.ts';
+import { InstrumentDirectory } from './domain/instruments/instrumentDirectory.ts';
 import { FIXTURE_INSTRUMENTS } from './domain/instruments/fixtureInstruments.ts';
 import { InMemoryInstrumentMaster } from './domain/instruments/instrumentMaster.ts';
 import { InstrumentResolver } from './domain/instruments/resolveInstrument.ts';
@@ -9,7 +10,9 @@ import { createLogger } from './logger.ts';
 import type { AnalysisRepository } from './repositories/analysisRepository.ts';
 import { InMemoryAnalysisRepository } from './repositories/inMemoryAnalysisRepository.ts';
 import { PrismaAnalysisRepository } from './repositories/prismaAnalysisRepository.ts';
+import { YahooMarketData } from './market/yahooMarketData.ts';
 import { FixtureResearchProvider } from './research/fixtureResearchProvider.ts';
+import { MarketResearchProvider } from './research/marketResearchProvider.ts';
 import { AnalysisService } from './services/analysisService.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -35,11 +38,12 @@ const repository: AnalysisRepository = prisma
   ? new PrismaAnalysisRepository(prisma, now)
   : new InMemoryAnalysisRepository(now);
 const master = new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS);
+const market = env.RESEARCH_PROVIDER === 'live' ? new YahooMarketData() : undefined;
 const service = new AnalysisService({
   repository,
-  resolver: new InstrumentResolver(master, now),
-  provider: new FixtureResearchProvider(master),
-  policy: POLICY_V1,
+  directory: new InstrumentDirectory(new InstrumentResolver(master, now), market, logger),
+  provider: market ? new MarketResearchProvider(market) : new FixtureResearchProvider(master),
+  policy: POLICY_V2,
   now,
   logger,
 });
@@ -65,7 +69,13 @@ const server = app.listen(env.PORT, env.HOST, (error?: Error) => {
     process.exit(1);
   }
   logger.info(
-    { host: env.HOST, port: env.PORT, nodeEnv: env.NODE_ENV, storage: env.STORAGE, research: 'fixture (synthetic)' },
+    {
+      host: env.HOST,
+      port: env.PORT,
+      nodeEnv: env.NODE_ENV,
+      storage: env.STORAGE,
+      research: env.RESEARCH_PROVIDER === 'live' ? 'live (yahoo-finance)' : 'fixture (synthetic)',
+    },
     'api listening',
   );
   // Express only wires the listen callback for startup errors; surface anything later instead of dropping it.

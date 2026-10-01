@@ -28,8 +28,14 @@ export function formatDateTime(iso: string): string {
   return dateTime.format(new Date(iso));
 }
 
-export function formatPrice(value: number): string {
-  return value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Price in the listing's currency, e.g. ₹1,23,715.00 or $47.76. */
+export function formatPrice(value: number, currency: 'INR' | 'USD' = 'INR'): string {
+  return value.toLocaleString(currency === 'INR' ? 'en-IN' : 'en-US', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 export const INDICATOR_LABEL = { BUY: 'BUY', DONT_BUY: "DON'T BUY", NEUTRAL: 'NEUTRAL' } as const;

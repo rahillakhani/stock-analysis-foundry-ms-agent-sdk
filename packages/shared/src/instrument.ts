@@ -4,10 +4,21 @@ import { IsoDate } from './common.ts';
 export const ASSET_TYPES = ['EQUITY', 'FUTURE', 'INDEX'] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
 
-/** MVP covers Indian exchanges only (see implementation-plan.md, finding 9). */
-export const EXCHANGES = ['NSE', 'BSE'] as const;
+/** Indian exchanges (with F&O and India-specific rules) and US exchanges. */
+export const EXCHANGES = ['NSE', 'BSE', 'NASDAQ', 'NYSE'] as const;
 export const Exchange = z.enum(EXCHANGES);
 export type Exchange = z.infer<typeof Exchange>;
+
+export const INDIAN_EXCHANGES: readonly Exchange[] = ['NSE', 'BSE'];
+
+export function isIndianExchange(exchange: Exchange): boolean {
+  return INDIAN_EXCHANGES.includes(exchange);
+}
+
+/** ISO 4217 trading currency of an exchange. */
+export function currencyFor(exchange: Exchange): 'INR' | 'USD' {
+  return isIndianExchange(exchange) ? 'INR' : 'USD';
+}
 
 /** Exchange trading symbol, e.g. `TATASTEEL`, `M&M`, `BAJAJ-AUTO`, `NIFTY`. For a future, its underlying. */
 export const TradingSymbol = z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,19}$/, 'must be an uppercase exchange symbol');
@@ -37,7 +48,7 @@ export const Instrument = z.discriminatedUnion('assetType', [
 ]);
 export type Instrument = z.infer<typeof Instrument>;
 
-const KEY_PATTERN = /^(NSE|BSE):([A-Z0-9][A-Z0-9&-]{0,19})(?::FUT:(\d{4}-\d{2}-\d{2}))?$/;
+const KEY_PATTERN = /^(NSE|BSE|NASDAQ|NYSE):([A-Z0-9][A-Z0-9&-]{0,19})(?::FUT:(\d{4}-\d{2}-\d{2}))?$/;
 
 /**
  * Canonical instrument key used across API, DB, and UI.
@@ -49,7 +60,11 @@ export const InstrumentKey = z
   .refine((key) => {
     const expiry = KEY_PATTERN.exec(key)?.[3];
     return expiry === undefined || IsoDate.safeParse(expiry).success;
-  }, 'expiry must be a real calendar date');
+  }, 'expiry must be a real calendar date')
+  .refine((key) => {
+    const match = KEY_PATTERN.exec(key);
+    return match?.[3] === undefined || match[1] === 'NSE';
+  }, 'futures contracts are NSE-only');
 export type InstrumentKey = z.infer<typeof InstrumentKey>;
 
 export function instrumentKey(instrument: Instrument): InstrumentKey {

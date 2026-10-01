@@ -23,9 +23,9 @@ const RunIdParams = z.object({ id: z.uuid() });
 export function apiRouter(service: AnalysisService): Router {
   const router = Router();
 
-  router.get('/stock/search', (req, res) => {
+  router.get('/stock/search', async (req, res) => {
     const { q } = parseRequest(SearchQuery, req.query);
-    res.json(SearchResponse.parse({ candidates: service.search(q) }));
+    res.json(SearchResponse.parse({ candidates: await service.search(q) }));
   });
 
   router.post('/stock/lookup', async (req, res) => {

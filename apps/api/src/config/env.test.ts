@@ -11,6 +11,7 @@ describe('loadEnv', () => {
       PORT: 3000,
       LOG_LEVEL: 'info',
       STORAGE: 'postgres',
+      RESEARCH_PROVIDER: 'live',
       DATABASE_URL: DB,
     });
   });
@@ -61,6 +62,7 @@ describe('loadEnv', () => {
     ['LOG_LEVEL', 'verbose'],
     ['HOST', ''],
     ['STORAGE', 'sqlite'],
+    ['RESEARCH_PROVIDER', 'bloomberg'],
   ])('rejects %s=%j, naming the variable', (name, value) => {
     expect(() => loadEnv({ STORAGE: 'memory', [name]: value })).toThrow(EnvValidationError);
     expect(() => loadEnv({ STORAGE: 'memory', [name]: value })).toThrow(new RegExp(`${name}:`));

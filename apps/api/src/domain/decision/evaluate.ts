@@ -34,7 +34,10 @@ export function evaluate(
 
   const evaluated: EvaluatedCheck[] = checks.map((definition) => ({
     definition,
-    outcome: definition.run({ snapshot, policy, read }),
+    outcome:
+      definition.appliesTo && !definition.appliesTo(snapshot.instrument)
+        ? { state: 'NOT_APPLICABLE' as const }
+        : definition.run({ snapshot, policy, read }),
   }));
   const applicable = evaluated.filter((c) => c.outcome.state !== 'NOT_APPLICABLE');
 
@@ -63,7 +66,7 @@ export function evaluate(
       fundamental: display(raw.fundamental) ?? 0,
       technical: display(raw.technical) ?? 0,
       derivatives: display(raw.derivatives),
-      sentiment: display(raw.sentiment) ?? 0,
+      sentiment: display(raw.sentiment),
     },
     riskReward: riskReward(snapshot, policy, read),
     reasons: factors(applicable, ['PASS']),

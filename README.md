@@ -4,9 +4,11 @@ AI stock and futures research engine: a deterministic TypeScript decision engine
 Azure OpenAI explanations. See `requirements.md` for the spec, `implementation-plan.md` for the phased plan and
 progress ledger, and `docs/decision-policy-v1.md` for exactly how BUY / DON'T BUY / NEUTRAL is decided.
 
-> **Status: MVP usable end to end (Phases 1–9).** Search, the "existing analysis" prompt, background analysis, and
-> the decision timeline work in the browser against PostgreSQL. **All research data is synthetic sample data** (no
-> market-data provider is connected yet), so verdicts are for trying the app, not for investing.
+> **Status: MVP usable end to end with live data.** Search any NSE, BSE, NASDAQ, or NYSE stock (e.g. `MRF`,
+> `MakeMyTrip`, `MMYT`); it is looked up and researched on the web via Yahoo Finance, then rated by the documented
+> rule set (`docs/decision-policy-v2.md`). **Not investment advice.** Yahoo Finance is an unofficial source whose
+> terms limit use to personal, non-commercial purposes. Indian F&O open interest, promoter pledging, and FII/DII flows
+> are not connected yet, so Indian stocks are rated at most NEUTRAL until the planned web-research step adds them.
 
 ## Prerequisites
 
@@ -55,6 +57,7 @@ API details:
 - JSON logs; for readable output: `npm run dev | npx pino-pretty`.
 
 **No database?** `STORAGE=memory npm run dev` runs everything in memory (data is lost on restart).
+**Offline?** `RESEARCH_PROVIDER=fixture npm run dev` uses synthetic sample data for the built-in list only.
 
 ### Try it
 
@@ -91,6 +94,7 @@ NODE_ENV=production HOST=0.0.0.0 PORT=3000 DATABASE_URL=postgresql://... npm sta
 | `PORT`              | `3000`        | 1–65535                                                                  |
 | `LOG_LEVEL`         | `info`        | `fatal` … `trace`, `silent`                                              |
 | `STORAGE`           | `postgres`    | `postgres`, or `memory` for a DB-less demo                               |
+| `RESEARCH_PROVIDER` | `live`        | `live` (Yahoo Finance lookup and research; needs internet) or `fixture`  |
 | `DATABASE_URL`      | —             | required when `STORAGE=postgres`; `postgresql://…`                        |
 | `DATABASE_URL_TEST` | —             | only for `npm run test:int`; must name a database ending in `_test`      |
 
@@ -131,7 +135,8 @@ requests. Postgres integration tests run locally until CI gains a database (defe
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `packages/shared`               | Zod contracts shared by API and web                                      |
 | `apps/api/src/domain`           | instrument resolution and the deterministic decision engine              |
-| `apps/api/src/research`         | research provider port, synthetic sample provider, aggregator           |
+| `apps/api/src/research`         | research provider port, live (market data) and sample providers, aggregator |
+| `apps/api/src/market`           | market-data port, Yahoo Finance adapter, symbol mapping, indicators      |
 | `apps/api/src/repositories`     | persistence port with Prisma (Postgres) and in-memory implementations   |
 | `apps/api/src/services`         | analysis orchestration (lookup, background runs)                         |
 | `apps/api/prisma`               | schema and migrations                                                    |

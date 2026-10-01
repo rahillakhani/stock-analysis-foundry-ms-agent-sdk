@@ -3,12 +3,15 @@ import { pino } from 'pino';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../app.ts';
-import { POLICY_V1 } from '../domain/decision/policy.ts';
+import { POLICY_V1, POLICY_V2 } from '../domain/decision/policy.ts';
 import { FIXTURE_INSTRUMENTS } from '../domain/instruments/fixtureInstruments.ts';
 import { InMemoryInstrumentMaster } from '../domain/instruments/instrumentMaster.ts';
+import { InstrumentDirectory } from '../domain/instruments/instrumentDirectory.ts';
 import { InstrumentResolver } from '../domain/instruments/resolveInstrument.ts';
 import { InMemoryAnalysisRepository } from '../repositories/inMemoryAnalysisRepository.ts';
 import { FixtureResearchProvider } from '../research/fixtureResearchProvider.ts';
+import { MarketResearchProvider } from '../research/marketResearchProvider.ts';
+import { FakeMarketData } from '../test-support/fakeMarket.ts';
 import { DEFAULT_AGGREGATOR_OPTIONS } from '../research/researchAggregator.ts';
 import type { ResearchProvider } from '../research/researchProvider.ts';
 import { AnalysisService } from '../services/analysisService.ts';
@@ -23,7 +26,7 @@ function setup(overrides: { provider?: ResearchProvider; start?: string } = {}) 
   const repository = new InMemoryAnalysisRepository(clock.now);
   const service = new AnalysisService({
     repository,
-    resolver: new InstrumentResolver(master, clock.now),
+    directory: new InstrumentDirectory(new InstrumentResolver(master, clock.now), undefined, pino({ level: 'silent' })),
     provider: overrides.provider ?? new FixtureResearchProvider(master),
     policy: POLICY_V1,
     now: clock.now,
@@ -211,7 +214,11 @@ describe('analysis flow (spec steps 1–4)', () => {
     const ctx = setup({ provider: never });
     ctx.service = new AnalysisService({
       repository: ctx.repository,
-      resolver: new InstrumentResolver(new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS), ctx.clock.now),
+      directory: new InstrumentDirectory(
+        new InstrumentResolver(new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS), ctx.clock.now),
+        undefined,
+        pino({ level: 'silent' }),
+      ),
       provider: never,
       policy: POLICY_V1,
       now: ctx.clock.now,
@@ -361,5 +368,57 @@ describe('GET /readyz', () => {
     ).get('/readyz');
     expect(down.status).toBe(503);
     expect(down.body).toEqual({ status: 'unavailable' });
+  });
+});
+
+describe('live research (web lookup + market data, offline fake vendor)', () => {
+  function liveSetup() {
+    const now = () => new Date('2026-10-01T10:00:00.000Z');
+    const market = new FakeMarketData(now());
+    const repository = new InMemoryAnalysisRepository(now);
+    const service = new AnalysisService({
+      repository,
+      directory: new InstrumentDirectory(
+        new InstrumentResolver(new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS), now),
+        market,
+        pino({ level: 'silent' }),
+      ),
+      provider: new MarketResearchProvider(market),
+      policy: POLICY_V2,
+      now,
+      logger: pino({ level: 'silent' }),
+    });
+    return { app: createApp({ logger: pino({ level: 'silent' }), service }), service };
+  }
+
+  it('finds MakeMyTrip by name on the web, analyses it, and records a v2 decision', async () => {
+    const { app, service } = liveSetup();
+    const lookup = LookupResponse.parse(
+      (await request(app).post('/api/v1/stock/lookup').send({ query: 'makemytrip' })).body,
+    );
+    expect(lookup).toMatchObject({ status: 'RESOLVED', instrumentKey: 'NASDAQ:MMYT', existing: null });
+
+    const accepted = await request(app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NASDAQ:MMYT' });
+    expect(accepted.status).toBe(202);
+    await service.idle();
+    const run = AnalysisRunView.parse(
+      (await request(app).get(`/api/v1/analysis-runs/${AnalyzeAccepted.parse(accepted.body).runId}`)).body,
+    );
+    expect(run).toMatchObject({ status: 'SUCCEEDED', decision: { policyVersion: 'v2' } });
+    expect(run.status === 'SUCCEEDED' && run.sources.every((s) => s.provider === 'yahoo-finance')).toBe(true);
+  });
+
+  it('suggests web results in autocomplete and resolves MRF to its NSE listing', async () => {
+    const { app } = liveSetup();
+    const search = SearchResponse.parse((await request(app).get('/api/v1/stock/search').query({ q: 'mrf' })).body);
+    expect(search.candidates.map((c) => c.key)).toEqual(['NSE:MRF']);
+    const lookup = LookupResponse.parse((await request(app).post('/api/v1/stock/lookup').send({ query: 'MRF' })).body);
+    expect(lookup).toMatchObject({ status: 'RESOLVED', instrumentKey: 'NSE:MRF' });
+  });
+
+  it('rejects analysing a key the market does not list', async () => {
+    const { app } = liveSetup();
+    const res = await request(app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NYSE:ZZZZ' });
+    expect(res.status).toBe(404);
   });
 });

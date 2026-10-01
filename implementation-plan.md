@@ -117,6 +117,10 @@ The goal is a runnable app with working search before any production-readiness w
   - all other hardening
 - **Unchanged:** the existing CI workflow keeps running lint/typecheck/unit tests/build. DB integration tests run
   locally with `npm run test:int`, and are reported as local results.
+- **Hybrid research (2026-10-01, owner decision):** step 1, Yahoo Finance for symbol lookup, prices, and statements
+  (done). Step 2, a web-search API plus Azure OpenAI extraction for India-specific disclosures (promoter pledging,
+  F&O open interest, FII/DII flows, bulk/block deals), once keys are provided. Yahoo is unofficial and for personal
+  use only; Phase 12 still needs a licensed vendor before any commercial use.
 - **Phase 7 split:** 7a (provider port, sample-data provider, aggregator with timeouts/retries/partial results) comes
   before the API and UI. 7b (MCP client lifecycle and McpResearchProvider) follows once search works, and before
   Phase 12's real providers, which depend on it.
@@ -354,6 +358,7 @@ Each item can be its own commit.
 | Phase 8 review | Reviewer → Implementer | Done; majors fixed: timeline capped at 500 (lookup could 500 forever), stalled in-flight runs closed after 10 minutes (a run whose failure couldn't be recorded blocked its stock); single-instance constraint documented | Also: 503 after shutdown, correct cancel/failure labelling, age from the run, empty DATABASE_URL, `/readyz` timeout, malformed id is 400 | — |
 | Phase 9: Web UI | Implementer | Done: `a8bc0a1` plus review fixes | 2026-09-30: Vite 8, React 19, Tailwind 4, Radix AlertDialog; SearchBar (ARIA combobox), ReAnalyzeModal, DecisionBadge (icon + label), MetricsGrid (meters), TimelineView, ResultView (timestamp, confidence, freshness, sample-data notice, partial warning, disclaimer); useResearch state machine (abortable, polling). 24 web tests (RTL + MSW, strict unhandled requests); gate exit 0 (537 total); build OK; proxied API verified with curl. Browser visual check not done (Chrome extension not connected) | Review; owner visual check |
 | Phase 9 review | Reviewer → Implementer | Done; major bug fixed ("Run fresh re-analysis" briefly showed the OLD result as current, because the dialog close also fired "view existing"); disclaimer added to the prompt; filled buttons meet WCAG AA (6.61:1) | Also: synchronous STARTING state, stale-update guards, polling backoff, transient-error tolerance and ceiling, input stays enabled (new search cancels), status rows outside the listbox, stale suggestions cleared, highlight reset on blur, narrow live region. 34 web tests, stable over 4 runs | Owner visual check |
+| Live web research (hybrid step 1) | Implementer | Done, pending review | 2026-10-01: Yahoo Finance adapter (validated, cached, abortable); search/lookup fall back to the web for any NSE/BSE/NASDAQ/NYSE listing; MarketResearchProvider computes indicators and ratios from raw bars and statements; NASDAQ/NYSE added; decision policy v2 (India-only checks scoped to NSE/BSE). 617 tests; engine coverage 100%. Live: MRF → NSE:MRF (DON'T BUY: shrinking margins), makemytrip/MMYT → NASDAQ:MMYT (NEUTRAL) | Review; step 2: web search + Azure OpenAI for pledging, F&O, flows (needs keys) |
 | Phases 11–13 | Implementer | Blocked on decisions 1–2 | — | — |
 
 ## 4. Residual risks

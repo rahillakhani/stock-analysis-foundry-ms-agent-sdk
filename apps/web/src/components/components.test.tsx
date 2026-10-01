@@ -37,3 +37,11 @@ describe('formatAge', () => {
     expect(formatAge(seconds)).toBe(expected);
   });
 });
+
+describe('formatPrice', () => {
+  it('formats in the listing currency', async () => {
+    const { formatPrice } = await import('../lib/format.ts');
+    expect(formatPrice(123715, 'INR')).toBe('₹1,23,715.00');
+    expect(formatPrice(47.76, 'USD')).toBe('$47.76');
+  });
+});

@@ -57,7 +57,8 @@ export const DecisionResult = z.object({
     technical: Score,
     /** null when the instrument has no F&O contract. */
     derivatives: Score.nullable(),
-    sentiment: Score,
+    /** null when no sentiment check applies to the listing (policy v2: India-only flows for a US stock). */
+    sentiment: Score.nullable(),
   }),
   /** null when the inputs needed for an estimate (price, ATR) are unavailable. */
   riskReward: RiskReward.nullable(),

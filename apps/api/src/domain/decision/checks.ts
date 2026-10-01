@@ -1,4 +1,10 @@
-import type { Metric, OI_BUILD_UPS, ResearchSnapshot } from '@stock-analysis/shared';
+import {
+  isIndianExchange,
+  type Instrument,
+  type Metric,
+  type OI_BUILD_UPS,
+  type ResearchSnapshot,
+} from '@stock-analysis/shared';
 import type { DecisionPolicy, Section } from './policy.ts';
 
 const MS_PER_DAY = 86_400_000;
@@ -78,6 +84,8 @@ export interface CheckDefinition {
   readonly requiredForBuy: boolean;
   readonly veto: boolean;
   readonly scored: boolean;
+  /** When set and false for the instrument, the check is NOT_APPLICABLE (excluded) without reading any data. */
+  readonly appliesTo?: (instrument: Instrument) => boolean;
   run(ctx: CheckContext): CheckOutcome;
 }
 
@@ -518,8 +526,31 @@ export const CHECKS_V1: readonly CheckDefinition[] = Object.freeze([
   }),
 ]);
 
+/** Checks for Indian-market disclosures and flows (promoter pledging, FII/DII, NSE/BSE bulk/block deals). */
+const INDIA_ONLY_CODES = new Set([
+  'PLEDGE_BELOW_MAX',
+  'PLEDGE_NOT_EXCESSIVE',
+  'FII_NET_BUYING',
+  'DII_NET_BUYING',
+  'DEALS_NOT_NET_SELLING',
+]);
+const indianListing = (instrument: Instrument) => isIndianExchange(instrument.exchange);
+
+/**
+ * v2 = v1 with the India-only checks scoped to NSE/BSE instruments (docs/decision-policy-v2.md). For US listings
+ * those checks are excluded, rather than unavailable, so a US stock can reach BUY on its applicable criteria.
+ */
+export const CHECKS_V2: readonly CheckDefinition[] = Object.freeze(
+  CHECKS_V1.map((definition) =>
+    INDIA_ONLY_CODES.has(definition.code) ? check({ ...definition, appliesTo: indianListing }) : definition,
+  ),
+);
+
 /** Check sets by policy version; a policy is always evaluated with its own version's checks. */
-const CHECKS_BY_VERSION: Readonly<Record<string, readonly CheckDefinition[]>> = Object.freeze({ v1: CHECKS_V1 });
+const CHECKS_BY_VERSION: Readonly<Record<string, readonly CheckDefinition[]>> = Object.freeze({
+  v1: CHECKS_V1,
+  v2: CHECKS_V2,
+});
 
 export function checksFor(policy: DecisionPolicy): readonly CheckDefinition[] {
   const checks = CHECKS_BY_VERSION[policy.version];

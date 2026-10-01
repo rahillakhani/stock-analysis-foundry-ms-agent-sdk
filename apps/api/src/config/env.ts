@@ -14,6 +14,11 @@ const EnvSchema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
     /** `postgres` (default) persists to DATABASE_URL; `memory` is an explicit opt-in for DB-less demos (data is lost on restart). */
     STORAGE: z.enum(['postgres', 'memory']).default('postgres'),
+    /**
+     * `live` (default): instruments and research from Yahoo Finance (internet access required). `fixture`: offline
+     * synthetic sample data for the built-in instrument list only.
+     */
+    RESEARCH_PROVIDER: z.enum(['live', 'fixture']).default('live'),
     // An empty value (e.g. `DATABASE_URL=` in .env) counts as unset.
     DATABASE_URL: z.preprocess(
       (value) => (value === '' ? undefined : value),

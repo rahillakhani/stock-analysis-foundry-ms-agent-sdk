@@ -83,7 +83,7 @@ export function SearchBar({ api, onSubmit, disabled = false, debounceMs = 250 }:
             aria-activedescendant={active >= 0 ? `${listId}-opt-${active}` : undefined}
             autoComplete="off"
             maxLength={100}
-            placeholder="e.g. TATASTEEL, Tata Steel, Nifty 50 Futures"
+            placeholder="e.g. MRF, MakeMyTrip, TATASTEEL, Nifty 50 Futures"
             value={text}
             disabled={disabled}
             onChange={(event) => {

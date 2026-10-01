@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { Instrument, InstrumentKey, instrumentKey, parseInstrumentKey, TradingSymbol } from './instrument.ts';
+import {
+  currencyFor,
+  Instrument,
+  InstrumentKey,
+  instrumentKey,
+  isIndianExchange,
+  parseInstrumentKey,
+  TradingSymbol,
+} from './instrument.ts';
 import { equity, niftyFuture } from './test-support/fixtures.ts';
 
 describe('TradingSymbol', () => {
@@ -28,7 +36,7 @@ describe('Instrument', () => {
   });
 
   it.each([
-    ['unsupported exchange', { ...equity, exchange: 'NASDAQ' }],
+    ['unsupported exchange', { ...equity, exchange: 'LSE' }],
     ['invalid expiry date', { ...niftyFuture, contract: { ...niftyFuture.contract, expiry: '2026-02-30' } }],
     ['zero lot size', { ...niftyFuture, contract: { ...niftyFuture.contract, lotSize: 0 } }],
     ['empty name', { ...equity, name: '' }],
@@ -63,8 +71,13 @@ describe('instrumentKey', () => {
     expect(InstrumentKey.safeParse(instrumentKey(niftyFuture)).success).toBe(true);
   });
 
+  it.each(['NASDAQ:MMYT', 'NYSE:IBM', 'BSE:MRF'])('InstrumentKey accepts %j', (key) => {
+    expect(InstrumentKey.safeParse(key).success).toBe(true);
+  });
+
   it.each([
-    'NASDAQ:AAPL',
+    'LSE:VOD',
+    'NASDAQ:MMYT:FUT:2026-10-27',
     'NSE:tatasteel',
     'TATASTEEL',
     'NSE:NIFTY:FUT:2026-1-1',
@@ -74,5 +87,17 @@ describe('instrumentKey', () => {
     'NSE:NIFTY:FUT:2026-02-30',
   ])('InstrumentKey rejects %j', (key) => {
     expect(InstrumentKey.safeParse(key).success).toBe(false);
+  });
+});
+
+describe('exchange helpers', () => {
+  it.each([
+    ['NSE', true, 'INR'],
+    ['BSE', true, 'INR'],
+    ['NASDAQ', false, 'USD'],
+    ['NYSE', false, 'USD'],
+  ] as const)('%s: indian=%s currency=%s', (exchange, indian, currency) => {
+    expect(isIndianExchange(exchange)).toBe(indian);
+    expect(currencyFor(exchange)).toBe(currency);
   });
 });

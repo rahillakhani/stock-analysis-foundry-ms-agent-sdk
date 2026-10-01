@@ -6,6 +6,7 @@ import {
   Sentiment,
   Source,
   Technicals,
+  currencyFor,
   type Instrument,
   type Metric,
 } from '@stock-analysis/shared';
@@ -36,7 +37,6 @@ export interface AggregatorOptions {
   random: () => number;
   /** Injected for tests; must reject if the signal aborts. */
   sleep: (ms: number, signal: AbortSignal) => Promise<void>;
-  currency: string;
 }
 
 const abortReason = (signal: AbortSignal) =>
@@ -59,7 +59,6 @@ export const DEFAULT_AGGREGATOR_OPTIONS: AggregatorOptions = {
       }, ms);
       signal.addEventListener('abort', onAbort, { once: true });
     }),
-  currency: 'INR',
 };
 
 export interface AggregatedResearch {
@@ -183,7 +182,8 @@ export async function aggregateResearch(
     const parsed = ResearchSnapshot.safeParse({
       schemaVersion: RESEARCH_SNAPSHOT_SCHEMA_VERSION,
       instrument,
-      currency: options.currency,
+      // Prices and ATR are in the listing's trading currency.
+      currency: currencyFor(instrument.exchange),
       asOf: asOf.toISOString(),
       ...sections,
       sources: [...sources.values()],

@@ -13,7 +13,7 @@ import {
 } from '../../test-support/snapshots.ts';
 import { CHECKS_V1, checksFor, classifyOiBuildUp, fmt } from './checks.ts';
 import { evaluate } from './evaluate.ts';
-import { POLICY_V1 } from './policy.ts';
+import { POLICY_V1, POLICY_V2 } from './policy.ts';
 
 const NOW = new Date('2026-09-30T10:05:00.000Z');
 const run = (snapshot: ResearchSnapshot) => evaluate(ResearchSnapshot.parse(snapshot), POLICY_V1, NOW);
@@ -411,7 +411,7 @@ describe('evaluate: custom check sets (engine invariants beyond v1)', () => {
     expect(result).toMatchObject({
       indicator: 'NEUTRAL',
       confidenceScore: 0,
-      subscores: { fundamental: 0, technical: 0, derivatives: null, sentiment: 0 },
+      subscores: { fundamental: 0, technical: 0, derivatives: null, sentiment: null },
     });
   });
 
@@ -427,7 +427,7 @@ describe('evaluate: custom check sets (engine invariants beyond v1)', () => {
     expect(result).toMatchObject({
       indicator: 'BUY',
       confidenceScore: 0,
-      subscores: { fundamental: 0, technical: 0, derivatives: null, sentiment: 0 },
+      subscores: { fundamental: 0, technical: 0, derivatives: null, sentiment: null },
     });
   });
 });
@@ -710,5 +710,45 @@ describe('evaluate: timestamps', () => {
     const farFuture = evaluate(ResearchSnapshot.parse(strongEquity()), POLICY_V1, new Date('2031-01-01T00:00:00.000Z'));
     expect(farFuture.indicator).toBe('BUY');
     expect(AS_OF).toBe('2026-09-30T10:00:00.000Z');
+  });
+});
+
+describe('policy v2: India-only checks are scoped to NSE/BSE listings', () => {
+  const usListing = (): ResearchSnapshot => {
+    const s = strongEquity();
+    s.instrument = { exchange: 'NASDAQ', symbol: 'TESTCO', name: 'Test Co Inc', assetType: 'EQUITY' };
+    s.currency = 'USD';
+    const na = { status: 'NOT_APPLICABLE' as const, value: null };
+    s.fundamentals.promoterHoldingPct = na;
+    s.fundamentals.promoterPledgePct = na;
+    s.sentiment.fiiNetFlow = na;
+    s.sentiment.diiNetFlow = na;
+    s.sentiment.bulkBlockDeals30d = na;
+    return s;
+  };
+
+  it('excludes pledging and Indian flows for a US listing, so it can reach BUY', () => {
+    const result = evaluate(ResearchSnapshot.parse(usListing()), POLICY_V2, NOW);
+    expect(result).toMatchObject({ indicator: 'BUY', policyVersion: 'v2', subscores: { sentiment: null } });
+    expect(result.reasons.map((f) => f.code)).not.toContain('PLEDGE_BELOW_MAX');
+    expect(result.riskFactors).toEqual([]);
+  });
+
+  it('treats the same US data as unavailable under v1 (why v2 exists)', () => {
+    expect(evaluate(ResearchSnapshot.parse(usListing()), POLICY_V1, NOW).indicator).toBe('NEUTRAL');
+  });
+
+  it('decides Indian listings exactly as v1 does', () => {
+    for (const snapshot of [strongEquity(), strongFuture()]) {
+      const v1 = evaluate(ResearchSnapshot.parse(snapshot), POLICY_V1, NOW);
+      const v2 = evaluate(ResearchSnapshot.parse(snapshot), POLICY_V2, NOW);
+      expect({ ...v2, policyVersion: 'v1' }).toEqual(v1);
+    }
+  });
+
+  it('still fails closed for an Indian listing with missing pledging', () => {
+    const s = strongEquity();
+    s.fundamentals.promoterPledgePct = { status: 'MISSING', value: null };
+    expect(evaluate(ResearchSnapshot.parse(s), POLICY_V2, NOW).indicator).toBe('NEUTRAL');
   });
 });

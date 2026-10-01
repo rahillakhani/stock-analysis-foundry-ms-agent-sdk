@@ -1,5 +1,11 @@
-import type { DecisionFactor, Instrument, TimelineEntryView } from '@stock-analysis/shared';
-import { AlertTriangle, FlaskConical, RefreshCw } from 'lucide-react';
+import {
+  currencyFor,
+  isIndianExchange,
+  type DecisionFactor,
+  type Instrument,
+  type TimelineEntryView,
+} from '@stock-analysis/shared';
+import { AlertTriangle, FlaskConical, Globe, RefreshCw } from 'lucide-react';
 import type { CompletedRun } from '../hooks/useResearch.ts';
 import { DIMENSION_LABEL, formatAge, formatDateTime, formatPrice } from '../lib/format.ts';
 import { DecisionBadge } from './DecisionBadge.tsx';
@@ -43,6 +49,8 @@ function FactorList({ title, factors, empty }: { title: string; factors: Decisio
 export function ResultView({ instrument, instrumentKey, run, timeline, ageSeconds, onReanalyze }: Props) {
   const { decision } = run;
   const synthetic = run.sources.some((source) => source.provider === 'fixture');
+  const live = run.sources.some((source) => source.provider === 'yahoo-finance');
+  const currency = currencyFor(instrument.exchange);
   const providers = [...new Set(run.sources.map((source) => source.provider))];
 
   return (
@@ -83,6 +91,21 @@ export function ResultView({ instrument, instrumentKey, run, timeline, ageSecond
         </p>
       )}
 
+      {live && (
+        <p
+          className="flex items-start gap-2 rounded-lg border border-border bg-surface-2 p-3 text-sm text-ink"
+          role="note"
+        >
+          <Globe aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong className="font-semibold">Live data from Yahoo Finance</strong> (unofficial, may be delayed).
+            Indicators are computed from daily prices; ratios from the latest reported statements.
+            {isIndianExchange(instrument.exchange) &&
+              ' F&O open interest, promoter pledging, and FII/DII flows are not connected yet, so Indian stocks can be at most NEUTRAL.'}
+          </span>
+        </p>
+      )}
+
       {run.status === 'PARTIAL' && (
         <p
           className="flex items-start gap-2 rounded-lg border border-border bg-critical-tint p-3 text-sm text-ink"
@@ -105,8 +128,9 @@ export function ResultView({ instrument, instrumentKey, run, timeline, ageSecond
             Risk-to-reward (hypothetical long entry): {decision.riskReward.ratio}
           </h3>
           <p className="tabular-nums text-ink-2">
-            Entry {formatPrice(decision.riskReward.entry)} · Stop {formatPrice(decision.riskReward.stop)} · Target{' '}
-            {formatPrice(decision.riskReward.target)}
+            Entry {formatPrice(decision.riskReward.entry, currency)} · Stop{' '}
+            {formatPrice(decision.riskReward.stop, currency)} · Target{' '}
+            {formatPrice(decision.riskReward.target, currency)}
           </p>
           <p className="mt-1 text-xs text-ink-3">{decision.riskReward.method}</p>
         </section>

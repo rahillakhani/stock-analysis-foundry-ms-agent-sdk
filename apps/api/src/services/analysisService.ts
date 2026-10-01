@@ -9,7 +9,7 @@ import {
 import type { Logger } from 'pino';
 import { evaluate } from '../domain/decision/evaluate.ts';
 import type { DecisionPolicy } from '../domain/decision/policy.ts';
-import type { InstrumentResolver } from '../domain/instruments/resolveInstrument.ts';
+import type { InstrumentDirectory } from '../domain/instruments/instrumentDirectory.ts';
 import { AppError } from '../http/errors.ts';
 import { RunInFlightError, TIMELINE_LIMIT, type AnalysisRepository } from '../repositories/analysisRepository.ts';
 import { aggregateResearch, type AggregatorOptions } from '../research/researchAggregator.ts';
@@ -17,7 +17,7 @@ import type { ResearchProvider } from '../research/researchProvider.ts';
 
 export interface AnalysisServiceDeps {
   repository: AnalysisRepository;
-  resolver: InstrumentResolver;
+  directory: InstrumentDirectory;
   provider: ResearchProvider;
   policy: DecisionPolicy;
   now: () => Date;
@@ -69,12 +69,12 @@ export class AnalysisService {
     this.#deps = deps;
   }
 
-  search(query: string): InstrumentSummary[] {
-    return this.#deps.resolver.search(query).map(toSummary);
+  async search(query: string): Promise<InstrumentSummary[]> {
+    return (await this.#deps.directory.search(query)).map(toSummary);
   }
 
   async lookup(query: string): Promise<LookupResponse> {
-    const resolution = this.#deps.resolver.resolve(query);
+    const resolution = await this.#deps.directory.resolve(query);
     if (resolution.status === 'NOT_FOUND') return { status: 'NOT_FOUND' };
     if (resolution.status === 'AMBIGUOUS') {
       return { status: 'AMBIGUOUS', candidates: resolution.candidates.map(toSummary) };
@@ -104,7 +104,7 @@ export class AnalysisService {
    */
   async analyze(key: string, force: boolean): Promise<AnalyzeAccepted> {
     if (this.#closed) throw new AppError(503, 'The server is shutting down. Please try again shortly.');
-    const instrument = this.#deps.resolver.byKey(key);
+    const instrument = await this.#deps.directory.byKey(key);
     if (!instrument) throw new AppError(404, `Unknown or expired instrument ${key}.`);
 
     const stock = await this.#deps.repository.upsertStock(instrument);

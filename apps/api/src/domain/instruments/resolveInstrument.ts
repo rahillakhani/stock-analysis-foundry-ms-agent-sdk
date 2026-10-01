@@ -46,7 +46,7 @@ export function parseQuery(raw: string): ParsedQuery {
   let text = (wantsFutures ? words.slice(0, -1) : words).join(' ');
 
   let prefixExchange: Exchange | undefined;
-  const prefix = /^(NSE|BSE)\s*:\s*/.exec(text);
+  const prefix = /^(NSE|BSE|NASDAQ|NYSE)\s*:\s*/.exec(text);
   if (prefix?.[1]) {
     prefixExchange = prefix[1] as Exchange;
     text = text.slice(prefix[0].length);
@@ -99,7 +99,7 @@ export class InstrumentResolver {
   /** Spec step 1: map a user query to exactly one instrument, several candidates, or nothing. */
   resolve(raw: string): Resolution {
     // A canonical key (e.g. picked from autocomplete, including futures keys) resolves exactly.
-    const byKey = /^(NSE|BSE):/.test(raw) ? this.byKey(raw.trim()) : undefined;
+    const byKey = /^(NSE|BSE|NASDAQ|NYSE):/.test(raw) ? this.byKey(raw.trim()) : undefined;
     if (byKey) return { status: 'RESOLVED', instrument: byKey };
 
     const query = this.#parse(raw);

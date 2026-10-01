@@ -68,3 +68,6 @@ export const POLICY_V1: DecisionPolicy = Object.freeze({
   riskReward: Object.freeze({ stopAtrMultiple: 2, targetAtrMultiple: 4, supportBufferAtr: 0.25 }),
   confidence: Object.freeze({ neutralBase: 50, vetoBase: 50, vetoStep: 25 }),
 });
+
+/** v2: same numbers as v1; India-only checks are scoped to NSE/BSE listings (see CHECKS_V2). */
+export const POLICY_V2: DecisionPolicy = Object.freeze({ ...POLICY_V1, version: 'v2' });
