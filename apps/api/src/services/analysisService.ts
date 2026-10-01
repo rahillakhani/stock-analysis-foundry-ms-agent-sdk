@@ -9,7 +9,10 @@ import {
 import type { Logger } from 'pino';
 import { evaluate } from '../domain/decision/evaluate.ts';
 import type { DecisionPolicy } from '../domain/decision/policy.ts';
-import type { InstrumentDirectory } from '../domain/instruments/instrumentDirectory.ts';
+import {
+  InstrumentLookupUnavailableError,
+  type InstrumentDirectory,
+} from '../domain/instruments/instrumentDirectory.ts';
 import { AppError } from '../http/errors.ts';
 import { RunInFlightError, TIMELINE_LIMIT, type AnalysisRepository } from '../repositories/analysisRepository.ts';
 import { aggregateResearch, type AggregatorOptions } from '../research/researchAggregator.ts';
@@ -28,6 +31,9 @@ export interface AnalysisServiceDeps {
 }
 
 const DEFAULT_STALE_RUN_AFTER_MS = 10 * 60_000;
+/** Interactive lookups (search, lookup, analyze) must answer promptly even if the market source hangs. */
+const LOOKUP_TIMEOUT_MS = 6_000;
+const lookupSignal = () => AbortSignal.timeout(LOOKUP_TIMEOUT_MS);
 
 /** Client-safe failure summaries stored on FAILED runs; internal detail goes to the log only. */
 const FAILURES = {
@@ -70,11 +76,11 @@ export class AnalysisService {
   }
 
   async search(query: string): Promise<InstrumentSummary[]> {
-    return (await this.#deps.directory.search(query)).map(toSummary);
+    return (await this.#deps.directory.search(query, lookupSignal())).map(toSummary);
   }
 
   async lookup(query: string): Promise<LookupResponse> {
-    const resolution = await this.#deps.directory.resolve(query);
+    const resolution = await this.#deps.directory.resolve(query, lookupSignal());
     if (resolution.status === 'NOT_FOUND') return { status: 'NOT_FOUND' };
     if (resolution.status === 'AMBIGUOUS') {
       return { status: 'AMBIGUOUS', candidates: resolution.candidates.map(toSummary) };
@@ -104,7 +110,15 @@ export class AnalysisService {
    */
   async analyze(key: string, force: boolean): Promise<AnalyzeAccepted> {
     if (this.#closed) throw new AppError(503, 'The server is shutting down. Please try again shortly.');
-    const instrument = await this.#deps.directory.byKey(key);
+    let instrument;
+    try {
+      instrument = await this.#deps.directory.byKey(key, lookupSignal());
+    } catch (err) {
+      if (err instanceof InstrumentLookupUnavailableError) {
+        throw new AppError(503, 'Market data is temporarily unavailable. Please try again shortly.', { cause: err });
+      }
+      throw err;
+    }
     if (!instrument) throw new AppError(404, `Unknown or expired instrument ${key}.`);
 
     const stock = await this.#deps.repository.upsertStock(instrument);

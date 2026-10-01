@@ -2,13 +2,16 @@ import type { Instrument } from '@stock-analysis/shared';
 import { describe, expect, it } from 'vitest';
 import { evaluate } from '../domain/decision/evaluate.ts';
 import { POLICY_V1, POLICY_V2 } from '../domain/decision/policy.ts';
-import { FakeMarketData } from '../test-support/fakeMarket.ts';
+import { FakeMarketData, QUARTERLY } from '../test-support/fakeMarket.ts';
 import {
   annualRatios,
   MarketResearchProvider,
   quarterLabel,
   quarterlyOperatingMargins,
+  trailingRatios,
 } from './marketResearchProvider.ts';
+
+const round4 = (v: number) => Number(v.toFixed(4));
 import { aggregateResearch } from './researchAggregator.ts';
 
 const AS_OF = new Date('2026-10-01T10:00:00.000Z');
@@ -17,8 +20,43 @@ const MMYT: Instrument = { exchange: 'NASDAQ', symbol: 'MMYT', name: 'MakeMyTrip
 const research = (instrument: Instrument, market = new FakeMarketData(AS_OF)) =>
   aggregateResearch(new MarketResearchProvider(market), instrument, AS_OF, new AbortController().signal);
 
-describe('annualRatios', () => {
-  it('computes ROE, D/E, margins, growth, and ROCE from the latest annual statement', () => {
+describe('trailingRatios (TTM from quarterly statements)', () => {
+  it('sums the last four consecutive quarters and uses the latest balance sheet', () => {
+    expect(trailingRatios(QUARTERLY)).toEqual({
+      income: { periodEnd: '2026-06-30', values: { netMarginPct: 15.7895, revenueGrowthYoYPct: 20 } },
+      balance: { periodEnd: '2026-06-30', values: { roePct: 20, debtToEquity: 0.3, rocePct: 23.6364 } },
+    });
+  });
+
+  it('dates balance-sheet ratios to the older balance sheet (Indian half-yearly reporting)', () => {
+    const rows = QUARTERLY.map((r) =>
+      r.periodEnd === '2026-06-30'
+        ? { ...r, stockholdersEquity: undefined }
+        : r.periodEnd === '2026-03-31'
+          ? { ...r, stockholdersEquity: 900, totalDebt: 270 }
+          : r,
+    );
+    expect(trailingRatios(rows)?.balance?.periodEnd).toBe('2026-03-31');
+  });
+
+  it('refuses non-consecutive quarters', () => {
+    expect(trailingRatios(QUARTERLY.filter((r) => r.periodEnd !== '2025-12-31'))).toBeUndefined();
+  });
+
+  it('keeps the newest row when two rows fall in the same quarter', () => {
+    const latest = QUARTERLY[QUARTERLY.length - 1];
+    const rows = [...QUARTERLY, { ...latest, periodEnd: '2026-06-29', netIncome: 90 }];
+    expect(trailingRatios(rows)?.income.values.netMarginPct).toBe(round4((100 * 225) / 1140));
+  });
+
+  it('omits ROE and D/E for zero or negative equity', () => {
+    const rows = QUARTERLY.map((r) => (r.periodEnd === '2026-06-30' ? { ...r, stockholdersEquity: -67 } : r));
+    expect(trailingRatios(rows)?.balance).toBeUndefined();
+  });
+});
+
+describe('annualRatios (fallback)', () => {
+  it('uses the latest annual statement and the directly preceding year for growth', () => {
     expect(
       annualRatios([
         { periodEnd: '2025-03-31', totalRevenue: 1000 },
@@ -33,25 +71,17 @@ describe('annualRatios', () => {
         },
       ]),
     ).toEqual({
-      periodEnd: '2026-03-31',
-      roePct: 20,
-      debtToEquity: 0.3,
-      netMarginPct: 16.3636,
-      revenueGrowthYoYPct: 10,
-      rocePct: 23.6364,
+      income: { periodEnd: '2026-03-31', values: { netMarginPct: 16.3636, revenueGrowthYoYPct: 10 } },
+      balance: { periodEnd: '2026-03-31', values: { roePct: 20, debtToEquity: 0.3, rocePct: 23.6364 } },
     });
   });
 
-  it('does not report ROE or D/E when equity is zero or negative', () => {
+  it('does not call a two-year gap year-over-year growth', () => {
     const ratios = annualRatios([
-      { periodEnd: '2026-03-31', totalRevenue: 1000, netIncome: 50, stockholdersEquity: -67, totalDebt: 1400 },
+      { periodEnd: '2023-03-31', totalRevenue: 800 },
+      { periodEnd: '2025-03-31', totalRevenue: 1000, netIncome: 50 },
     ]);
-    expect(ratios).toMatchObject({
-      roePct: undefined,
-      debtToEquity: undefined,
-      netMarginPct: 5,
-      revenueGrowthYoYPct: undefined,
-    });
+    expect(ratios?.income.values.revenueGrowthYoYPct).toBeUndefined();
   });
 
   it('returns undefined without any revenue', () => {
@@ -84,14 +114,18 @@ describe('MarketResearchProvider', () => {
 
     expect(unavailableDimensions).toEqual([]);
     expect(snapshot.currency).toBe('INR');
+    // TTM ratio, dated to the latest quarter rather than the fiscal year end.
     expect(snapshot.fundamentals.roePct).toMatchObject({
       status: 'OK',
       value: 20,
-      observedAt: '2026-03-31T00:00:00.000Z',
+      observedAt: '2026-06-30T00:00:00.000Z',
     });
     expect(snapshot.fundamentals.promoterPledgePct.status).toBe('MISSING');
     expect(snapshot.technicals.ema200.status).toBe('OK');
-    expect(snapshot.technicals.rsiDivergence).toMatchObject({ value: { lookbackBars: 14 } });
+    expect(snapshot.technicals.rsiDivergence).toMatchObject({ value: { lookbackBars: 30 } });
+    // Today's (possibly partial) session bar is excluded: the latest bar used is from an earlier day.
+    const price = snapshot.technicals.lastPrice;
+    expect(price.status === 'OK' && price.observedAt < '2026-10-01').toBe(true);
     expect(snapshot.derivatives.inFnoBan.status).toBe('MISSING');
     expect(snapshot.sentiment.fiiNetFlow.status).toBe('MISSING');
     expect(
@@ -116,8 +150,18 @@ describe('MarketResearchProvider', () => {
     ]);
   });
 
+  it('falls back to annual ratios when quarterly data is insufficient', async () => {
+    const { snapshot } = await research(MRF, new FakeMarketData(AS_OF, { quarterly: [] }));
+    expect(snapshot.fundamentals.roePct).toMatchObject({
+      status: 'OK',
+      value: 20,
+      observedAt: '2026-03-31T00:00:00.000Z',
+    });
+  });
+
   it('reports ROE and D/E as missing for negative equity', async () => {
     const market = new FakeMarketData(AS_OF, {
+      quarterly: [],
       annual: [
         { periodEnd: '2026-03-31', totalRevenue: 1000, netIncome: 50, stockholdersEquity: -67, totalDebt: 1400 },
       ],

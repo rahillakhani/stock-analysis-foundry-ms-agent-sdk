@@ -1,29 +1,58 @@
 import { isIndianExchange, type Instrument, type Source } from '@stock-analysis/shared';
-import { atr, breakoutUp, ema, rsiDivergence, rsiSeries, volumeRatio } from '../market/indicators.ts';
+import {
+  atr,
+  breakoutUp,
+  DIVERGENCE_DEFAULTS,
+  ema,
+  rsiDivergence,
+  rsiSeries,
+  volumeRatio,
+  type Bar,
+} from '../market/indicators.ts';
 import type { MarketDataSource, StatementRow } from '../market/marketData.ts';
 import { yahooSymbolFor } from '../market/symbols.ts';
-import type { Dimension, DimensionData, DimensionResult, FetchContext, ResearchProvider } from './researchProvider.ts';
+import { MarketDataError } from '../market/yahooMarketData.ts';
+import {
+  RetryableProviderError,
+  type Dimension,
+  type DimensionData,
+  type DimensionResult,
+  type FetchContext,
+  type ResearchProvider,
+} from './researchProvider.ts';
 
 // Live research from a market-data vendor. Every number is either a vendor fact (price bars, statement lines,
-// valuation ratios) or computed here from those facts with documented formulas, so values are reproducible from the
-// cited sources. Data the vendor doesn't carry is MISSING (it lowers confidence and never counts toward BUY), and
-// concepts that don't exist for a market are NOT_APPLICABLE (e.g. promoter pledging for US stocks).
+// valuation ratios) or computed here from those facts with the formulas documented in docs/decision-policy-v2.md
+// ("Live research methodology"), so values are reproducible from the cited sources. Data the vendor doesn't carry
+// is MISSING (it lowers confidence and never counts toward BUY); concepts that don't exist for a market are
+// NOT_APPLICABLE (e.g. promoter pledging for US stocks).
 
 const DAY_MS = 86_400_000;
-/** Enough daily bars for EMA200 plus warm-up. */
-const PRICE_HISTORY_DAYS = 420;
-const DIVERGENCE_LOOKBACK_BARS = 14;
+/** ~3 years of daily bars, so EMA200 is well converged (its seed's weight decays below 5%). */
+const PRICE_HISTORY_DAYS = 3 * 365 + 30;
 const BREAKOUT_RANGE_WEEKS = 6;
 const TRADING_DAYS_PER_WEEK = 5;
+const EXCHANGE_TIME_ZONE = {
+  NSE: 'Asia/Kolkata',
+  BSE: 'Asia/Kolkata',
+  NASDAQ: 'America/New_York',
+  NYSE: 'America/New_York',
+} as const;
 
 const MISSING = { status: 'MISSING' as const, value: null };
 const NOT_APPLICABLE = { status: 'NOT_APPLICABLE' as const, value: null };
 const round = (value: number, digits = 4) => Number(value.toFixed(digits));
+const sum = (values: number[]) => values.reduce((total, v) => total + v, 0);
 
 /** Calendar quarter label for a period-end date: 2026-06-30 -> 2026-Q2. */
 export function quarterLabel(periodEnd: string): string {
   const month = Number(periodEnd.slice(5, 7));
   return `${periodEnd.slice(0, 4)}-Q${Math.ceil(month / 3)}`;
+}
+
+/** Sequential calendar-quarter number, so consecutive quarters differ by exactly 1. */
+function quarterIndex(periodEnd: string): number {
+  return Number(periodEnd.slice(0, 4)) * 4 + Math.ceil(Number(periodEnd.slice(5, 7)) / 3) - 1;
 }
 
 /** Period end as an observation timestamp, never later than the snapshot time. */
@@ -40,45 +69,139 @@ function sourceId(kind: string, vendorSymbol: string, asOf: Date): string {
   return `yahoo:${kind}:${symbol}:${asOf.toISOString().slice(0, 10)}`;
 }
 
-/** Ratios from the latest annual statement (and the prior one for growth). Undefined when not meaningful. */
-export function annualRatios(rows: readonly StatementRow[]) {
-  const withRevenue = rows.filter((r) => r.totalRevenue !== undefined && r.totalRevenue > 0);
-  const latest = withRevenue.at(-1);
-  const prior = withRevenue.at(-2);
-  if (!latest) return undefined;
-  const equity = latest.stockholdersEquity;
-  // ROE and D/E are meaningless with zero or negative equity (e.g. after large buybacks or losses).
-  const positiveEquity = equity !== undefined && equity > 0 ? equity : undefined;
-  const revenue = latest.totalRevenue ?? 0;
-  return {
+/** Calendar date of an instant in the exchange's own time zone. */
+function exchangeDate(instant: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
+    instant,
+  );
+}
+
+type RatioKey = 'roePct' | 'debtToEquity' | 'rocePct' | 'netMarginPct' | 'revenueGrowthYoYPct';
+
+/** Ratios with the period their inputs come from; `periodEnd` is the OLDEST input (it decides freshness). */
+interface RatioGroup {
+  periodEnd: string;
+  values: Partial<Record<RatioKey, number>>;
+}
+
+interface Ratios {
+  income: RatioGroup;
+  balance?: RatioGroup;
+}
+
+/** Keeps the newest row per calendar quarter, oldest first. */
+function newestPerQuarter(rows: readonly StatementRow[]): StatementRow[] {
+  const byQuarter = new Map<number, StatementRow>();
+  for (const row of rows) byQuarter.set(quarterIndex(row.periodEnd), row);
+  return [...byQuarter.entries()].sort(([a], [b]) => a - b).map(([, row]) => row);
+}
+
+/**
+ * Trailing-twelve-month ratios from the last four CONSECUTIVE quarterly income statements and the latest balance
+ * sheet. Two groups are dated separately: income-only ratios (latest quarter) and balance-sheet ratios (the older of
+ * the latest quarter and the balance-sheet date). Undefined without four consecutive quarters.
+ */
+export function trailingRatios(quarterly: readonly StatementRow[]): Ratios | undefined {
+  const rows = newestPerQuarter(quarterly);
+  const income = rows.filter((r) => r.totalRevenue !== undefined && r.totalRevenue > 0 && r.netIncome !== undefined);
+  const last4 = income.slice(-4);
+  const latest = last4.at(-1);
+  if (last4.length < 4 || !latest) return undefined;
+  const consecutive = last4.every(
+    (r, i) => i === 0 || quarterIndex(r.periodEnd) === quarterIndex(last4[i - 1]?.periodEnd ?? '') + 1,
+  );
+  if (!consecutive) return undefined;
+
+  const revenue = sum(last4.map((r) => r.totalRevenue ?? 0));
+  const netIncome = sum(last4.map((r) => r.netIncome ?? 0));
+  const yearAgo = rows.find((r) => quarterIndex(r.periodEnd) === quarterIndex(latest.periodEnd) - 4);
+  const incomeGroup: RatioGroup = {
     periodEnd: latest.periodEnd,
-    roePct:
-      positiveEquity && latest.netIncome !== undefined ? round((100 * latest.netIncome) / positiveEquity) : undefined,
-    debtToEquity:
-      positiveEquity && latest.totalDebt !== undefined
-        ? round(Math.max(0, latest.totalDebt) / positiveEquity)
-        : undefined,
-    netMarginPct: latest.netIncome !== undefined ? round((100 * latest.netIncome) / revenue) : undefined,
-    revenueGrowthYoYPct:
-      prior?.totalRevenue !== undefined ? round(100 * (revenue / prior.totalRevenue - 1)) : undefined,
-    rocePct:
-      latest.ebit !== undefined && latest.investedCapital !== undefined && latest.investedCapital > 0
-        ? round((100 * latest.ebit) / latest.investedCapital)
-        : undefined,
+    values: {
+      netMarginPct: round((100 * netIncome) / revenue),
+      // Latest quarter vs the same quarter a year earlier (seasonality-neutral YoY).
+      ...(yearAgo?.totalRevenue && yearAgo.totalRevenue > 0
+        ? { revenueGrowthYoYPct: round(100 * ((latest.totalRevenue ?? 0) / yearAgo.totalRevenue - 1)) }
+        : {}),
+    },
+  };
+
+  const sheet = [...rows].reverse().find((r) => r.stockholdersEquity !== undefined);
+  const equity = sheet?.stockholdersEquity;
+  // ROE and D/E are meaningless with zero or negative equity (e.g. after large buybacks or accumulated losses).
+  if (!sheet || equity === undefined || equity <= 0) return { income: incomeGroup };
+  const ebitKnown = last4.every((r) => r.ebit !== undefined);
+  return {
+    income: incomeGroup,
+    balance: {
+      periodEnd: sheet.periodEnd < latest.periodEnd ? sheet.periodEnd : latest.periodEnd,
+      values: {
+        roePct: round((100 * netIncome) / equity),
+        ...(sheet.totalDebt !== undefined ? { debtToEquity: round(Math.max(0, sheet.totalDebt) / equity) } : {}),
+        ...(ebitKnown && sheet.investedCapital !== undefined && sheet.investedCapital > 0
+          ? { rocePct: round((100 * sum(last4.map((r) => r.ebit ?? 0))) / sheet.investedCapital) }
+          : {}),
+      },
+    },
   };
 }
 
-/** Quarterly operating margins (calendar-quarter labels), oldest first; quarters lacking data are skipped. */
+/** Fallback when quarterly data is insufficient: the latest annual statement (dated to its fiscal year end). */
+export function annualRatios(rows: readonly StatementRow[]): Ratios | undefined {
+  const withRevenue = rows.filter((r) => r.totalRevenue !== undefined && r.totalRevenue > 0);
+  const latest = withRevenue.at(-1);
+  if (!latest) return undefined;
+  const prior = withRevenue.at(-2);
+  const revenue = latest.totalRevenue ?? 0;
+  const consecutiveYears =
+    prior !== undefined && Number(latest.periodEnd.slice(0, 4)) - Number(prior.periodEnd.slice(0, 4)) === 1;
+  const income: RatioGroup = {
+    periodEnd: latest.periodEnd,
+    values: {
+      ...(latest.netIncome !== undefined ? { netMarginPct: round((100 * latest.netIncome) / revenue) } : {}),
+      // Only a directly preceding fiscal year counts as year-over-year.
+      ...(consecutiveYears && prior.totalRevenue
+        ? { revenueGrowthYoYPct: round(100 * (revenue / prior.totalRevenue - 1)) }
+        : {}),
+    },
+  };
+  const equity = latest.stockholdersEquity;
+  if (equity === undefined || equity <= 0) return { income };
+  return {
+    income,
+    balance: {
+      periodEnd: latest.periodEnd,
+      values: {
+        ...(latest.netIncome !== undefined ? { roePct: round((100 * latest.netIncome) / equity) } : {}),
+        ...(latest.totalDebt !== undefined ? { debtToEquity: round(Math.max(0, latest.totalDebt) / equity) } : {}),
+        ...(latest.ebit !== undefined && latest.investedCapital !== undefined && latest.investedCapital > 0
+          ? { rocePct: round((100 * latest.ebit) / latest.investedCapital) }
+          : {}),
+      },
+    },
+  };
+}
+
+/** Quarterly operating margins (calendar-quarter labels, newest row per quarter), oldest first. */
 export function quarterlyOperatingMargins(rows: readonly StatementRow[]) {
-  return rows
+  return newestPerQuarter(rows)
     .filter((r) => r.totalRevenue !== undefined && r.totalRevenue > 0 && r.operatingIncome !== undefined)
     .map((r) => ({
       period: quarterLabel(r.periodEnd),
       periodEnd: r.periodEnd,
       valuePct: round((100 * (r.operatingIncome ?? 0)) / (r.totalRevenue ?? 1)),
     }))
-    .filter((q, i, all) => all.findIndex((other) => other.period === q.period) === i)
     .slice(-8);
+}
+
+/** Vendor failures worth retrying become RetryableProviderError for the aggregator's bounded retry. */
+async function classifyFailures<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (err) {
+    if (err instanceof MarketDataError && err.retryable) throw new RetryableProviderError(err.message, { cause: err });
+    throw err;
+  }
 }
 
 export class MarketResearchProvider implements ResearchProvider {
@@ -97,7 +220,7 @@ export class MarketResearchProvider implements ResearchProvider {
       derivatives: () => Promise.resolve(this.#derivatives(instrument)),
       sentiment: () => this.#sentiment(instrument, ctx),
     };
-    return builders[dimension]();
+    return classifyFailures(builders[dimension]());
   }
 
   #vendorSymbol(instrument: Instrument): string {
@@ -132,25 +255,34 @@ export class MarketResearchProvider implements ResearchProvider {
 
     const symbol = this.#vendorSymbol(instrument);
     const { asOf, signal } = ctx;
+    const today = asOf.toISOString().slice(0, 10);
     const [annual, quarterly, valuation] = await Promise.all([
       this.#market.statements(symbol, 'annual', new Date(asOf.getTime() - 4 * 365 * DAY_MS), signal),
-      this.#market.statements(symbol, 'quarterly', new Date(asOf.getTime() - 2 * 365 * DAY_MS), signal),
+      this.#market.statements(symbol, 'quarterly', new Date(asOf.getTime() - 3 * 365 * DAY_MS), signal),
       this.#market.valuation(symbol, signal),
     ]);
+    const reported = (rows: StatementRow[]) => rows.filter((r) => r.periodEnd <= today);
+    const ttm = trailingRatios(reported(quarterly));
+    const fallback = annualRatios(reported(annual));
+    const quarters = quarterlyOperatingMargins(reported(quarterly));
     const statementsSource = this.#source('statements', instrument, asOf);
     const quoteSource = this.#source('valuation', instrument, asOf);
-    const ratios = annualRatios(annual.filter((r) => r.periodEnd <= asOf.toISOString().slice(0, 10)));
-    const quarters = quarterlyOperatingMargins(quarterly.filter((r) => r.periodEnd <= asOf.toISOString().slice(0, 10)));
 
-    const fromStatements = (value: number | undefined) =>
-      ratios && value !== undefined
-        ? {
+    /** Prefer TTM; fall back to the annual figure (older, so it may read as stale under the policy's max age). */
+    const ratio = (group: 'income' | 'balance', key: RatioKey) => {
+      for (const candidate of [ttm?.[group], fallback?.[group]]) {
+        const value = candidate?.values[key];
+        if (candidate && value !== undefined) {
+          return {
             status: 'OK' as const,
             value,
             sourceId: statementsSource.id,
-            observedAt: observedAt(ratios.periodEnd, asOf),
-          }
-        : MISSING;
+            observedAt: observedAt(candidate.periodEnd, asOf),
+          };
+        }
+      }
+      return MISSING;
+    };
     const fromQuote = (value: number | undefined) =>
       value !== undefined
         ? { status: 'OK' as const, value: round(value), sourceId: quoteSource.id, observedAt: asOf.toISOString() }
@@ -160,8 +292,8 @@ export class MarketResearchProvider implements ResearchProvider {
     const indiaOnly = isIndianExchange(instrument.exchange) ? MISSING : NOT_APPLICABLE;
 
     const data: DimensionData['fundamentals'] = {
-      revenueGrowthYoYPct: fromStatements(ratios?.revenueGrowthYoYPct),
-      netMarginPct: fromStatements(ratios?.netMarginPct),
+      revenueGrowthYoYPct: ratio('income', 'revenueGrowthYoYPct'),
+      netMarginPct: ratio('income', 'netMarginPct'),
       operatingMarginPctQuarterly: latestQuarter
         ? {
             status: 'OK',
@@ -171,12 +303,10 @@ export class MarketResearchProvider implements ResearchProvider {
           }
         : MISSING,
       peRatio: fromQuote(valuation.trailingPe),
-      psRatio: fromQuote(
-        valuation.priceToSales !== undefined && valuation.priceToSales >= 0 ? valuation.priceToSales : undefined,
-      ),
-      debtToEquity: fromStatements(ratios?.debtToEquity),
-      roePct: fromStatements(ratios?.roePct),
-      rocePct: fromStatements(ratios?.rocePct),
+      psRatio: fromQuote(valuation.priceToSales),
+      debtToEquity: ratio('balance', 'debtToEquity'),
+      roePct: ratio('balance', 'roePct'),
+      rocePct: ratio('balance', 'rocePct'),
       promoterHoldingPct: indiaOnly,
       promoterPledgePct: indiaOnly,
       auditorOpinion: MISSING,
@@ -186,7 +316,7 @@ export class MarketResearchProvider implements ResearchProvider {
   }
 
   async #technicals(instrument: Instrument, ctx: FetchContext): Promise<DimensionResult<'technicals'>> {
-    const missing = {
+    const missing: DimensionData['technicals'] = {
       lastPrice: MISSING,
       ema20: MISSING,
       ema50: MISSING,
@@ -201,27 +331,26 @@ export class MarketResearchProvider implements ResearchProvider {
     if (instrument.assetType === 'FUTURE') return { data: missing, sources: [] };
 
     const { asOf, signal } = ctx;
-    const bars = (
-      await this.#market.dailyBars(
-        this.#vendorSymbol(instrument),
-        new Date(asOf.getTime() - PRICE_HISTORY_DAYS * DAY_MS),
-        signal,
-      )
-    ).filter((bar) => bar.date <= asOf.toISOString());
+    const timeZone = EXCHANGE_TIME_ZONE[instrument.exchange];
+    const sessionToday = exchangeDate(asOf, timeZone);
+    const from = new Date(asOf.getTime() - PRICE_HISTORY_DAYS * DAY_MS);
+    // Only completed sessions: today's bar may be partial (intraday volume, live price).
+    const bars: Bar[] = (await this.#market.dailyBars(this.#vendorSymbol(instrument), from, signal)).filter(
+      (bar) => bar.date <= asOf.toISOString() && exchangeDate(new Date(bar.date), timeZone) < sessionToday,
+    );
     const latest = bars.at(-1);
     if (!latest) return { data: missing, sources: [] };
 
     const source = this.#source('chart', instrument, asOf);
-    const at = latest.date;
     const ok = <T>(value: T | undefined) =>
-      value === undefined ? MISSING : { status: 'OK' as const, value, sourceId: source.id, observedAt: at };
+      value === undefined ? MISSING : { status: 'OK' as const, value, sourceId: source.id, observedAt: latest.date };
     const closes = bars.map((bar) => bar.close);
-    const divergence = rsiDivergence(closes, DIVERGENCE_LOOKBACK_BARS);
-    const breakout = breakoutUp(bars, BREAKOUT_RANGE_WEEKS * TRADING_DAYS_PER_WEEK);
+    const positive = (value: number | undefined) => (value !== undefined && value > 0 ? round(value) : undefined);
     const rsi = rsiSeries(closes, 14).at(-1);
     const averageTrueRange = atr(bars, 14);
     const volume = volumeRatio(bars, 20);
-    const positive = (value: number | undefined) => (value !== undefined && value > 0 ? round(value) : undefined);
+    const divergence = rsiDivergence(closes);
+    const breakout = breakoutUp(bars, BREAKOUT_RANGE_WEEKS * TRADING_DAYS_PER_WEEK);
 
     const data: DimensionData['technicals'] = {
       lastPrice: ok(positive(latest.close)),
@@ -232,7 +361,7 @@ export class MarketResearchProvider implements ResearchProvider {
       atr14: ok(averageTrueRange === undefined ? undefined : round(averageTrueRange)),
       volumeRatio20d: ok(volume === undefined ? undefined : round(volume)),
       rsiDivergence: ok(
-        divergence === undefined ? undefined : { kind: divergence, lookbackBars: DIVERGENCE_LOOKBACK_BARS },
+        divergence === undefined ? undefined : { kind: divergence, lookbackBars: DIVERGENCE_DEFAULTS.lookback },
       ),
       consolidationBreakout: ok(
         breakout === undefined ? undefined : { brokeOutUp: breakout, rangeWeeks: BREAKOUT_RANGE_WEEKS },

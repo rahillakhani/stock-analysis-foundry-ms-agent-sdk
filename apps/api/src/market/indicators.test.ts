@@ -59,32 +59,78 @@ describe('volumeRatio', () => {
     expect(volumeRatio(bars)).toBe(2.5);
     expect(volumeRatio(bars.slice(0, 10))).toBeUndefined();
   });
+
+  it('treats zero volume (not reported, e.g. indices) as unavailable', () => {
+    const bars = [...Array.from({ length: 20 }, () => bar(100, { volume: 100 })), bar(100, { volume: 0 })];
+    expect(volumeRatio(bars)).toBeUndefined();
+  });
 });
 
-describe('rsiDivergence', () => {
-  it('is undefined without two full windows of history', () => {
+describe('rsiDivergence (swing pivots)', () => {
+  // Rally to an overbought peak, pull back, grind to a marginally higher high on weaker momentum, then turn down.
+  const bearishSetup = [
+    ...Array.from({ length: 40 }, (_, i) => 100 + i * 2),
+    ...Array.from({ length: 8 }, (_, i) => 175 - i * 3),
+    ...Array.from({ length: 12 }, (_, i) => 156 + i * 2),
+    180,
+    178,
+    176,
+    175,
+    173,
+    172,
+  ];
+
+  it('detects a bearish divergence and its mirror image as bullish', () => {
+    expect(rsiDivergence(bearishSetup)).toBe('BEARISH');
+    expect(rsiDivergence(bearishSetup.map((p) => 300 - p))).toBe('BULLISH');
+  });
+
+  it('needs the second high to be confirmed by later bars', () => {
+    expect(rsiDivergence(bearishSetup.slice(0, -4))).toBe('NONE');
+  });
+
+  it('is undefined without enough history and NONE for a steady uptrend', () => {
     expect(rsiDivergence([1, 2, 3])).toBeUndefined();
+    expect(rsiDivergence(Array.from({ length: 80 }, (_, i) => 100 + i))).toBe('NONE');
   });
 
-  it('reports NONE for a steady uptrend (higher highs with non-falling RSI)', () => {
-    const up = Array.from({ length: 60 }, (_, i) => 100 + i);
-    expect(rsiDivergence(up)).toBe('NONE');
-  });
-
-  it('reports BEARISH when price makes a higher high on weaker momentum', () => {
-    // Strong rally, pullback, then a slow grind to a marginal new high.
-    const rally = Array.from({ length: 28 }, (_, i) => 100 + i * 2); // to 154
-    const pullback = Array.from({ length: 10 }, (_, i) => 154 - i * 2); // to 136
-    const grind = Array.from({ length: 18 }, (_, i) => 136 + i * 1.2); // to ~156.4 (> 154)
-    expect(rsiDivergence([...rally, ...pullback, ...grind])).toBe('BEARISH');
+  it('rarely fires on random walks that contain no real divergence (it is a veto)', () => {
+    const rng = (seed: number) => {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let t = state;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+      };
+    };
+    const walks = 400;
+    let bearish = 0;
+    for (let k = 0; k < walks; k++) {
+      const random = rng(1000 + k);
+      let price = 100;
+      const closes = Array.from({ length: 290 }, () => {
+        const gaussian = Math.sqrt(-2 * Math.log(random() || 1e-9)) * Math.cos(2 * Math.PI * random());
+        price *= Math.exp(0.002 + 0.015 * gaussian);
+        return price;
+      });
+      if (rsiDivergence(closes) === 'BEARISH') bearish++;
+    }
+    expect(bearish / walks).toBeLessThan(0.04);
   });
 });
 
 describe('breakoutUp', () => {
-  it('is true only when the latest close clears the prior range high', () => {
+  it('is true only when the latest close clears the high of a narrow prior range', () => {
     const range = Array.from({ length: 30 }, () => bar(100));
     expect(breakoutUp([...range, bar(102)], 30)).toBe(true);
     expect(breakoutUp([...range, bar(101)], 30)).toBe(false);
     expect(breakoutUp(range.slice(0, 10), 30)).toBeUndefined();
+  });
+
+  it('is not a breakout when the prior range was wide (no consolidation)', () => {
+    const trending = Array.from({ length: 30 }, (_, i) => bar(100 + i * 2));
+    expect(breakoutUp([...trending, bar(200)], 30)).toBe(false);
   });
 });

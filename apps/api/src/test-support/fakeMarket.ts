@@ -26,6 +26,19 @@ export const FAKE_HITS: Record<string, MarketSearchHit[]> = {
     { vendorSymbol: 'MY1.F', exchangeCode: 'FRA', quoteType: 'EQUITY', name: 'MakeMyTrip Limited' },
   ],
   mmyt: [{ vendorSymbol: 'MMYT', exchangeCode: 'NMS', quoteType: 'EQUITY', name: 'MakeMyTrip Limited' }],
+  sun: [
+    { vendorSymbol: 'SUN', exchangeCode: 'NYQ', quoteType: 'EQUITY', name: 'Sunoco LP' },
+    {
+      vendorSymbol: 'SUNPHARMA.NS',
+      exchangeCode: 'NSI',
+      quoteType: 'EQUITY',
+      name: 'Sun Pharmaceutical Industries Limited',
+    },
+  ],
+  gold: [
+    { vendorSymbol: 'GOLD', exchangeCode: 'NYQ', quoteType: 'EQUITY', name: 'Gold.com, Inc.' },
+    { vendorSymbol: 'NEM', exchangeCode: 'NYQ', quoteType: 'EQUITY', name: 'Newmont Corporation' },
+  ],
   make: [
     { vendorSymbol: 'MMYT', exchangeCode: 'NMS', quoteType: 'EQUITY', name: 'MakeMyTrip Limited' },
     { vendorSymbol: 'MKTX', exchangeCode: 'NMS', quoteType: 'EQUITY', name: 'MarketAxess Holdings Inc.' },
@@ -67,22 +80,34 @@ export const ANNUAL: StatementRow[] = [
   },
 ];
 
+/** Five consecutive calendar quarters (TTM = the last four) plus an empty row, as Yahoo returns them. */
 export const QUARTERLY: StatementRow[] = [
   { periodEnd: '2025-03-31' },
-  { periodEnd: '2025-09-30', totalRevenue: 270, operatingIncome: 40 },
-  { periodEnd: '2025-12-31', totalRevenue: 280, operatingIncome: 42 },
-  { periodEnd: '2026-03-31', totalRevenue: 290, operatingIncome: 45 },
-  { periodEnd: '2026-06-30', totalRevenue: 300, operatingIncome: 48 },
+  { periodEnd: '2025-06-30', totalRevenue: 250, netIncome: 30, operatingIncome: 38, ebit: 55 },
+  { periodEnd: '2025-09-30', totalRevenue: 270, netIncome: 45, operatingIncome: 40, ebit: 65 },
+  { periodEnd: '2025-12-31', totalRevenue: 280, netIncome: 45, operatingIncome: 42, ebit: 65 },
+  { periodEnd: '2026-03-31', totalRevenue: 290, netIncome: 45, operatingIncome: 45, ebit: 65 },
+  {
+    periodEnd: '2026-06-30',
+    totalRevenue: 300,
+    netIncome: 45,
+    operatingIncome: 48,
+    ebit: 65,
+    stockholdersEquity: 900,
+    totalDebt: 270,
+    investedCapital: 1_100,
+  },
 ];
 
 export class FakeMarketData implements MarketDataSource {
   readonly name = 'yahoo-finance';
   readonly calls: string[] = [];
   failSearch = false;
+  failQuote = false;
   readonly #asOf: Date;
-  readonly #overrides: { annual?: StatementRow[]; news?: NewsItem[] };
+  readonly #overrides: { annual?: StatementRow[]; quarterly?: StatementRow[]; news?: NewsItem[] };
 
-  constructor(asOf: Date, overrides: { annual?: StatementRow[]; news?: NewsItem[] } = {}) {
+  constructor(asOf: Date, overrides: { annual?: StatementRow[]; quarterly?: StatementRow[]; news?: NewsItem[] } = {}) {
     this.#asOf = asOf;
     this.#overrides = overrides;
   }
@@ -99,6 +124,7 @@ export class FakeMarketData implements MarketDataSource {
 
   quote(vendorSymbol: string): Promise<MarketQuote | undefined> {
     this.calls.push(`quote:${vendorSymbol}`);
+    if (this.failQuote) return Promise.reject(new Error('yahoo down'));
     const hit = Object.values(FAKE_HITS)
       .flat()
       .find((h) => h.vendorSymbol === vendorSymbol);
@@ -110,7 +136,9 @@ export class FakeMarketData implements MarketDataSource {
   }
 
   statements(_symbol: string, period: 'annual' | 'quarterly'): Promise<StatementRow[]> {
-    return Promise.resolve(period === 'annual' ? (this.#overrides.annual ?? ANNUAL) : QUARTERLY);
+    return Promise.resolve(
+      period === 'annual' ? (this.#overrides.annual ?? ANNUAL) : (this.#overrides.quarterly ?? QUARTERLY),
+    );
   }
 
   valuation(): Promise<Valuation> {

@@ -7,11 +7,18 @@ import { nameKey, parseQuery, type InstrumentResolver, type Resolution } from '.
 const MAX_CANDIDATES = 20;
 const MAX_SEARCH_RESULTS = 10;
 
+/** The market source could not be reached, so a web-only instrument can't be confirmed right now (not "unknown"). */
+export class InstrumentLookupUnavailableError extends Error {
+  override readonly name = 'InstrumentLookupUnavailableError';
+}
+
 /**
  * Finds instruments in the built-in list first and, when a market-data source is configured, on the web (any
- * NSE/BSE/NASDAQ/NYSE listing). The same safety rule applies to both: only an exact symbol or exact company name
- * resolves; anything looser returns candidates for the user to confirm. A failing web lookup degrades to the
- * built-in results instead of failing the request.
+ * NSE/BSE/NASDAQ/NYSE listing). Web results auto-resolve only when the intent is unambiguous: the input looks like
+ * a ticker (typed in capitals or with an exchange marker) and matches exactly one symbol, it is exactly one
+ * company's name, or the web returns a single listing. Dictionary words that happen to be tickers ("sun", "gold")
+ * come back as candidates, and a web result never overrides built-in candidates. A failing web search degrades to
+ * the built-in results.
  */
 export class InstrumentDirectory {
   readonly #resolver: InstrumentResolver;
@@ -33,15 +40,19 @@ export class InstrumentDirectory {
     if (query.wantsFutures || query.conflictingExchange || query.text.length === 0) return local;
 
     const web = await this.#webInstruments(query.text, query.exchange, signal);
-    const symbolKey = query.text.toUpperCase();
-    const name = nameKey(query.text);
-    const exact = web.filter((i) => i.symbol === symbolKey || (name.length > 0 && nameKey(i.name) === name));
-    if (exact.length === 1 && exact[0]) return { status: 'RESOLVED', instrument: exact[0] };
+    if (local.status !== 'AMBIGUOUS') {
+      const typed = raw.trim();
+      const looksLikeTicker = query.exchange !== undefined || /^[A-Z0-9&-]+$/.test(typed);
+      const name = nameKey(query.text);
+      const bySymbol = web.filter((i) => i.symbol === query.text.toUpperCase());
+      const byName = web.filter((i) => name.length > 0 && nameKey(i.name) === name);
+      const unique = (
+        looksLikeTicker && bySymbol.length === 1 ? bySymbol : byName.length === 1 ? byName : web.length === 1 ? web : []
+      )[0];
+      if (unique) return { status: 'RESOLVED', instrument: unique };
+    }
 
-    const candidates = dedupe([
-      ...(local.status === 'AMBIGUOUS' ? local.candidates : []),
-      ...(exact.length > 1 ? exact : web),
-    ]);
+    const candidates = dedupe([...(local.status === 'AMBIGUOUS' ? local.candidates : []), ...web]);
     return candidates.length === 0
       ? { status: 'NOT_FOUND' }
       : { status: 'AMBIGUOUS', candidates: candidates.slice(0, MAX_CANDIDATES) };
@@ -64,14 +75,15 @@ export class InstrumentDirectory {
     if (local || !this.#market) return local;
     const parsed = parseInstrumentKey(key);
     if (!parsed || parsed.futureExpiry !== undefined) return undefined;
+    let quote;
     try {
-      const quote = await this.#market.quote(yahooSymbolFor(parsed.exchange, parsed.symbol), signal);
-      const instrument = quote ? instrumentFromYahoo(quote) : undefined;
-      return instrument && instrumentKey(instrument) === key ? instrument : undefined;
+      quote = await this.#market.quote(yahooSymbolFor(parsed.exchange, parsed.symbol), signal);
     } catch (err) {
-      this.#logger.warn({ err, key }, 'market lookup by key failed');
-      return undefined;
+      this.#logger.warn({ error: describe(err), key }, 'market lookup by key failed');
+      throw new InstrumentLookupUnavailableError('The market data service is unavailable', { cause: err });
     }
+    const instrument = quote ? instrumentFromYahoo(quote) : undefined;
+    return instrument && instrumentKey(instrument) === key ? instrument : undefined;
   }
 
   async #webInstruments(text: string, exchange: string | undefined, signal?: AbortSignal): Promise<Instrument[]> {
@@ -83,10 +95,15 @@ export class InstrumentDirectory {
         .filter((i): i is Instrument => i !== undefined && (exchange === undefined || i.exchange === exchange));
       return preferNse(instruments, exchange);
     } catch (err) {
-      this.#logger.warn({ err }, 'market search failed; using built-in instruments only');
+      this.#logger.warn({ error: describe(err) }, 'market search failed; using built-in instruments only');
       return [];
     }
   }
+}
+
+/** Short error description for logs (vendor errors can carry whole HTML pages). */
+function describe(err: unknown): string {
+  return err instanceof Error ? `${err.name}: ${err.message.slice(0, 200)}` : 'unknown error';
 }
 
 /** Unique by canonical key, first occurrence wins. */

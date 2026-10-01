@@ -38,11 +38,16 @@ const repository: AnalysisRepository = prisma
   ? new PrismaAnalysisRepository(prisma, now)
   : new InMemoryAnalysisRepository(now);
 const master = new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS);
-const market = env.RESEARCH_PROVIDER === 'live' ? new YahooMarketData() : undefined;
+const live = env.RESEARCH_PROVIDER === 'live';
+// Separate Yahoo clients (each with its own request queue) so interactive search can't starve research, and vice versa.
+const lookupMarket = live ? new YahooMarketData({ logger: logger.child({ component: 'yahoo-lookup' }) }) : undefined;
+const researchMarket = live
+  ? new YahooMarketData({ logger: logger.child({ component: 'yahoo-research' }) })
+  : undefined;
 const service = new AnalysisService({
   repository,
-  directory: new InstrumentDirectory(new InstrumentResolver(master, now), market, logger),
-  provider: market ? new MarketResearchProvider(market) : new FixtureResearchProvider(master),
+  directory: new InstrumentDirectory(new InstrumentResolver(master, now), lookupMarket, logger),
+  provider: researchMarket ? new MarketResearchProvider(researchMarket) : new FixtureResearchProvider(master),
   policy: POLICY_V2,
   now,
   logger,

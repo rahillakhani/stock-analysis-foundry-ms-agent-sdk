@@ -28,6 +28,7 @@ describe('instrumentFromYahoo', () => {
     [hit('MRF.BO', 'BSE'), { exchange: 'BSE', symbol: 'MRF' }],
     [hit('MMYT', 'NMS', 'EQUITY', 'MakeMyTrip Limited'), { exchange: 'NASDAQ', symbol: 'MMYT' }],
     [hit('IBM', 'NYQ'), { exchange: 'NYSE', symbol: 'IBM' }],
+    [hit('BRK-B', 'NYQ', 'EQUITY', 'Berkshire Hathaway Inc.'), { exchange: 'NYSE', symbol: 'BRK-B' }],
   ])('maps %j', (input, expected) => {
     expect(instrumentFromYahoo(input)).toMatchObject({ ...expected, assetType: 'EQUITY' });
   });
@@ -40,6 +41,8 @@ describe('instrumentFromYahoo', () => {
     ['a suffix that disagrees with the exchange', hit('MRF.BO', 'NSI')],
     ['a symbol outside our grammar', hit('BRK.B', 'NYQ')],
     ['an empty name', hit('MMYT', 'NMS', 'EQUITY', '  ')],
+    ['a US preferred share', hit('F-PB', 'NYQ', 'EQUITY', 'Ford Motor Company 6.20% Notes')],
+    ['an Indian ETF', hit('HDFCSILVER.NS', 'NSI', 'EQUITY', 'HDFC Silver ETF')],
   ])('skips %s', (_label, input) => {
     expect(instrumentFromYahoo(input)).toBeUndefined();
   });

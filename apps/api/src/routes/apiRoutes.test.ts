@@ -416,6 +416,27 @@ describe('live research (web lookup + market data, offline fake vendor)', () => 
     expect(lookup).toMatchObject({ status: 'RESOLVED', instrumentKey: 'NSE:MRF' });
   });
 
+  it('answers 503, not 404, when the market source is down during analyze', async () => {
+    const now = () => new Date('2026-10-01T10:00:00.000Z');
+    const market = new FakeMarketData(now());
+    market.failQuote = true;
+    const service = new AnalysisService({
+      repository: new InMemoryAnalysisRepository(now),
+      directory: new InstrumentDirectory(
+        new InstrumentResolver(new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS), now),
+        market,
+        pino({ level: 'silent' }),
+      ),
+      provider: new MarketResearchProvider(market),
+      policy: POLICY_V2,
+      now,
+      logger: pino({ level: 'silent' }),
+    });
+    const app = createApp({ logger: pino({ level: 'silent' }), service });
+    const res = await request(app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NASDAQ:MMYT' });
+    expect(res.status).toBe(503);
+  });
+
   it('rejects analysing a key the market does not list', async () => {
     const { app } = liveSetup();
     const res = await request(app).post('/api/v1/stock/analyze').send({ instrumentKey: 'NYSE:ZZZZ' });

@@ -39,5 +39,9 @@ export function instrumentFromYahoo(hit: MarketSearchHit): Instrument | undefine
     return undefined;
   }
   const name = hit.name.trim().slice(0, 180);
+  // Yahoo labels some non-common-stock listings EQUITY: US preferred shares/notes (e.g. F-PB) and Indian ETFs.
+  const preferredSymbol = !(exchange === 'NSE' || exchange === 'BSE') && /-P[A-Z]?$/.test(symbol);
+  const nonCommonName = /\b(ETF|ETN|notes?|preferred|pref|debentures?|bonds?|depositary units?)\b|%/i.test(name);
+  if (preferredSymbol || nonCommonName) return undefined;
   return name.length > 0 ? { exchange, symbol, name, assetType: 'EQUITY' } : undefined;
 }
