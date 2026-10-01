@@ -176,7 +176,7 @@ export class YahooMarketData implements MarketDataSource {
     const log = options.logger;
     this.#client =
       options.client ??
-      (new YahooFinance({
+      new YahooFinance({
         suppressNotices: ['yahooSurvey'],
         versionCheck: false,
         queue: { concurrency: options.concurrency ?? 4 },
@@ -191,7 +191,7 @@ export class YahooMarketData implements MarketDataSource {
             log?.warn({ args: args.map(String).join(' ').slice(0, 300) }, 'yahoo-finance2'),
           dir: () => undefined,
         },
-      }));
+      });
   }
 
   pageUrl(vendorSymbol: string): string {
