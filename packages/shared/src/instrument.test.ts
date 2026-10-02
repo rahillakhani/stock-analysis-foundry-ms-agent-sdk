@@ -71,13 +71,14 @@ describe('instrumentKey', () => {
     expect(InstrumentKey.safeParse(instrumentKey(niftyFuture)).success).toBe(true);
   });
 
-  it.each(['NASDAQ:MMYT', 'NYSE:IBM', 'BSE:MRF'])('InstrumentKey accepts %j', (key) => {
+  it.each(['NASDAQ:MMYT', 'NYSE:IBM', 'BSE:MRF', 'BSE:SENSEX:FUT:2026-10-29'])('InstrumentKey accepts %j', (key) => {
     expect(InstrumentKey.safeParse(key).success).toBe(true);
   });
 
   it.each([
     'LSE:VOD',
     'NASDAQ:MMYT:FUT:2026-10-27',
+    'NYSE:IBM:FUT:2026-10-27',
     'NSE:tatasteel',
     'TATASTEEL',
     'NSE:NIFTY:FUT:2026-1-1',

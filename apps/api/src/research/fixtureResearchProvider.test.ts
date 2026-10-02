@@ -42,7 +42,7 @@ describe('FixtureResearchProvider', () => {
 
   it('produces complete, valid research for every fixture instrument and its futures', async () => {
     const queries = FIXTURE_INSTRUMENTS.map((r) => `${r.exchange}:${r.symbol}`);
-    const futures = FIXTURE_INSTRUMENTS.filter((r) => r.futuresExpiries).map((r) => `NSE:${r.symbol} FUT`);
+    const futures = FIXTURE_INSTRUMENTS.filter((r) => r.futuresExpiries).map((r) => `${r.exchange}:${r.symbol} FUT`);
     for (const query of [...queries, ...futures]) {
       const result = await aggregateResearch(fixture, instrument(query), AS_OF, signal());
       expect(result.unavailableDimensions, query).toEqual([]);

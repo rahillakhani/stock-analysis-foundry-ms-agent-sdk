@@ -15,6 +15,18 @@ const MONTHLY_EXPIRIES = [
   '2027-04-27',
 ] as const;
 
+/** BSE equity-derivative monthly expiries fall on the last Thursday (illustrative, no holiday adjustment). */
+const BSE_MONTHLY_EXPIRIES = [
+  '2026-09-24',
+  '2026-10-29',
+  '2026-11-26',
+  '2026-12-31',
+  '2027-01-28',
+  '2027-02-25',
+  '2027-03-25',
+  '2027-04-29',
+] as const;
+
 const nse = (symbol: string, name: string, aliases: string[] = [], fno?: { lotSize: number }): InstrumentRecord => ({
   exchange: 'NSE',
   symbol,
@@ -42,6 +54,15 @@ export const FIXTURE_INSTRUMENTS: readonly InstrumentRecord[] = [
     aliases: ['Bank Nifty', 'Nifty Bank Index'],
     futuresExpiries: MONTHLY_EXPIRIES,
     futuresLotSize: 35,
+  },
+  {
+    exchange: 'BSE',
+    symbol: 'SENSEX',
+    name: 'S&P BSE Sensex',
+    assetType: 'INDEX',
+    aliases: ['Sensex', 'BSE Sensex', 'BSE 30', 'Sensex Index'],
+    futuresExpiries: BSE_MONTHLY_EXPIRIES,
+    futuresLotSize: 20,
   },
   nse('RELIANCE', 'Reliance Industries Ltd', ['Reliance', 'RIL'], { lotSize: 500 }),
   nse('TCS', 'Tata Consultancy Services Ltd', ['Tata Consultancy'], { lotSize: 175 }),

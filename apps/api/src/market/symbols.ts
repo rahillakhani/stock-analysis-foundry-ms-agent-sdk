@@ -16,6 +16,7 @@ const YAHOO_EXCHANGES: Readonly<Record<string, Exchange>> = {
 const YAHOO_INDEX_SYMBOLS: Readonly<Record<string, string>> = {
   'NSE:NIFTY': '^NSEI',
   'NSE:BANKNIFTY': '^NSEBANK',
+  'BSE:SENSEX': '^BSESN',
 };
 
 /** Our instrument -> Yahoo symbol: NSE:MRF -> MRF.NS, BSE:MRF -> MRF.BO, NASDAQ:MMYT -> MMYT. */

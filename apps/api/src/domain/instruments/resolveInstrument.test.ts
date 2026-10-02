@@ -40,6 +40,9 @@ describe('InstrumentResolver.resolve', () => {
     ['Larsen and Toubro', 'NSE:LT'],
     ['mahindra & mahindra', 'NSE:M&M'],
     ['Nifty 50', 'NSE:NIFTY'],
+    ['sensex', 'BSE:SENSEX'],
+    ['SENSEX', 'BSE:SENSEX'],
+    ['BSE Sensex', 'BSE:SENSEX'],
     ['ultratech', 'NSE:ULTRACEMCO'],
   ])('%j -> %s', (query, expected) => {
     expect(keyOf(resolver.resolve(query))).toBe(expected);
@@ -51,6 +54,10 @@ describe('InstrumentResolver.resolve', () => {
     ['bank nifty futures', 'NSE:BANKNIFTY:FUT:2026-10-27'],
     ['TATASTEEL FUT', 'NSE:TATASTEEL:FUT:2026-10-27'],
     ['reliance future', 'NSE:RELIANCE:FUT:2026-10-27'],
+    // BSE index futures expire on the last Thursday.
+    ['sensex future', 'BSE:SENSEX:FUT:2026-10-29'],
+    ['Sensex futures', 'BSE:SENSEX:FUT:2026-10-29'],
+    ['SENSEX FUT', 'BSE:SENSEX:FUT:2026-10-29'],
     ['TATASTEEL.NS FUT', 'NSE:TATASTEEL:FUT:2026-10-27'],
   ])('futures intent %j -> %s', (query, expected) => {
     expect(keyOf(resolver.resolve(query))).toBe(expected);

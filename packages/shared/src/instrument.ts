@@ -68,8 +68,9 @@ export const InstrumentKey = z
   }, 'expiry must be a real calendar date')
   .refine((key) => {
     const match = KEY_PATTERN.exec(key);
-    return match?.[3] === undefined || match[1] === 'NSE';
-  }, 'futures contracts are NSE-only');
+    // Indian exchange-traded futures only: NSE (e.g. NIFTY) and BSE (e.g. SENSEX).
+    return match?.[3] === undefined || match[1] === 'NSE' || match[1] === 'BSE';
+  }, 'futures contracts are NSE/BSE-only');
 export type InstrumentKey = z.infer<typeof InstrumentKey>;
 
 export function instrumentKey(instrument: Instrument): InstrumentKey {
