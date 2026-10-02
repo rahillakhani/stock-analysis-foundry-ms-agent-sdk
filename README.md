@@ -114,6 +114,9 @@ Never commit a real `.env`; `apps/api/.env.example` holds placeholders only.
 | GET    | `/api/v1/market/movers`        | top 10 NIFTY 50 gainers and losers for the latest session (live data only)                 |
 | GET    | `/api/v1/market/chart/:key`    | `?interval=5m` (latest session) or `1d` (one year, default): OHLCV bars (live data only)    |
 | GET    | `/api/v1/market/quote/:key`    | live ticker: price, day change, market state (live data only)                              |
+| GET    | `/api/v1/watchlist`            | pinned instruments, newest first, with live price and latest signal                        |
+| PUT    | `/api/v1/watchlist/:key`       | pin (idempotent) → updated list; `404` unknown, `409` `WATCHLIST_FULL` (max 50)             |
+| DELETE | `/api/v1/watchlist/:key`       | unpin (idempotent) → updated list                                                          |
 
 Request and response shapes are the Zod contracts in `packages/shared/src/api.ts`; the API validates every response
 against them. Errors are `application/problem+json` (RFC 9457) with `requestId` and, where relevant, `code`, `runId`,

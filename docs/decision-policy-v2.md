@@ -84,3 +84,17 @@ percentage).
 **Not available from this source.** Promoter holding and pledging, auditor opinion, F&O data, FII/DII flows, and
 bulk/block deals are MISSING for Indian listings and NOT_APPLICABLE for US ones. As a result, **Indian stocks are at
 most NEUTRAL** until a source for those disclosures is connected (the planned web-research step).
+
+## 4. Buy guidance (presentation, not policy)
+
+Completed runs are returned with `buyGuidance`, derived from the recorded decision when it is read
+(`apps/api/src/domain/decision/guidance.ts`). It changes nothing the engine decides or stores.
+
+- **Blockers:** the veto ("red flag") and buy-rule checks that failed or had no usable data. Every one must clear for
+  the rules to say BUY. Roles come from the check definitions of the decision's own policy version.
+- **Improvements:** scored-only checks that failed. They lower the subscores but never block BUY.
+- **Data completeness:** usable applicable checks ÷ applicable checks, the factor in every confidence formula (§4 of
+  v1). The UI uses it to explain the confidence figure. For example, DON'T BUY with one failed veto and 81.8%
+  completeness gives 0.818 × 50 = 40.9%.
+
+Confidence is never a probability of a price rise; the UI says so next to the figure.

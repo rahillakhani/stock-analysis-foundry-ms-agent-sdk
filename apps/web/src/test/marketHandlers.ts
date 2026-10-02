@@ -11,6 +11,7 @@ export const marketHandlers = [
   http.get(`${API}/stocks`, () => HttpResponse.json({ stocks: [] })),
   http.get(`${API}/market/chart/:key`, () => HttpResponse.json(intradayChart)),
   http.get(`${API}/market/quote/:key`, () => HttpResponse.json(liveQuote())),
+  http.get(`${API}/watchlist`, () => HttpResponse.json({ items: [] })),
 ];
 
 /** Records what the chart was asked to draw (jsdom has no canvas). */

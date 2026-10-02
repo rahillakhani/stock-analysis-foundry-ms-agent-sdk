@@ -183,7 +183,7 @@ export class MarketService {
 }
 
 /** Price and day change, deriving the change from the previous close when the vendor omits it. */
-function priceMove(quote: MarketQuote): { price: number; change: number; changePct: number } | undefined {
+export function priceMove(quote: MarketQuote): { price: number; change: number; changePct: number } | undefined {
   const { price, previousClose } = quote;
   if (price === undefined || price <= 0) return undefined;
   const hasPrevious = previousClose !== undefined && previousClose > 0;

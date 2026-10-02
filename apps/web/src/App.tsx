@@ -5,9 +5,11 @@ import { MarketMovers } from './components/MarketMovers.tsx';
 import { PriceChart, type CandleChartFactory } from './components/PriceChart.tsx';
 import { ReAnalyzeModal } from './components/ReAnalyzeModal.tsx';
 import { RecentStocks } from './components/RecentStocks.tsx';
+import { PinButton, WatchlistPanel } from './components/WatchlistPanel.tsx';
 import { ResultView } from './components/ResultView.tsx';
 import { SearchBar } from './components/SearchBar.tsx';
 import { useResearch, type ResearchState } from './hooks/useResearch.ts';
+import { useWatchlist } from './hooks/useWatchlist.ts';
 
 interface Props {
   api?: ApiClient;
@@ -55,6 +57,8 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs, chartFact
   const api = useMemo(() => injected ?? createApiClient(), [injected]);
   const [state, actions] = useResearch(api, { pollIntervalMs });
   const current = selected(state);
+  const watchlist = useWatchlist(api);
+  const viewing = 'instrument' in state ? { key: state.instrumentKey, name: state.instrument.name } : undefined;
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8">
@@ -79,6 +83,11 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs, chartFact
           </p>
 
           <main className="mt-6 space-y-6">
+            {viewing && (
+              <div className="flex justify-end">
+                <PinButton watchlist={watchlist} instrumentKey={viewing.key} name={viewing.name} />
+              </div>
+            )}
             {current && (
               <PriceChart
                 key={current.instrumentKey}
@@ -195,7 +204,8 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs, chartFact
           </main>
         </div>
 
-        <aside aria-label="Searched stocks" className="order-3">
+        <aside aria-label="Watchlist and searched stocks" className="order-3 space-y-6">
+          <WatchlistPanel watchlist={watchlist} onSelect={actions.lookup} />
           <RecentStocks
             api={api}
             onSelect={actions.lookup}

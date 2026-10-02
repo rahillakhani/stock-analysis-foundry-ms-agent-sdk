@@ -314,3 +314,34 @@ export type AnalysedStock = z.infer<typeof AnalysedStock>;
  */
 export const AnalysedStocks = z.object({ stocks: z.array(AnalysedStock).max(100) });
 export type AnalysedStocks = z.infer<typeof AnalysedStocks>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Watchlist: pinned instruments, each with its live price (when available) and latest analysis (when analysed).
+// ---------------------------------------------------------------------------------------------------------------
+
+export const WATCHLIST_LIMIT = 50;
+
+export const WatchlistItem = z.object({
+  instrumentKey: InstrumentKey,
+  name: z.string().min(1).max(200),
+  exchange: Exchange,
+  assetType: z.enum(['EQUITY', 'FUTURE', 'INDEX']),
+  pinnedAt: IsoDateTime,
+  /** Null when there is no live price (futures, live data off, or the vendor is unavailable). */
+  quote: z
+    .object({
+      currency: z.string().regex(/^[A-Z]{3}$/),
+      price: z.number().positive(),
+      change: z.number(),
+      changePct: z.number(),
+      marketState: MarketState,
+    })
+    .nullable(),
+  /** Null until the instrument has a completed analysis. */
+  latest: AnalysedStock.omit({ instrumentKey: true, name: true, exchange: true }).nullable(),
+});
+export type WatchlistItem = z.infer<typeof WatchlistItem>;
+
+/** GET/PUT/DELETE /api/v1/watchlist : pinned instruments, most recently pinned first. */
+export const Watchlist = z.object({ items: z.array(WatchlistItem).max(WATCHLIST_LIMIT) });
+export type Watchlist = z.infer<typeof Watchlist>;

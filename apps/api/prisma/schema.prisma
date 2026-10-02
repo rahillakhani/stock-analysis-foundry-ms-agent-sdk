@@ -104,3 +104,15 @@ model AnalysisTimeline {
 
   @@index([stockId, createdAt])
 }
+
+/// Pinned instruments. One list for the whole app (there are no user accounts yet). Not tied to Stock, so an
+/// instrument can be pinned before it is ever analysed.
+model WatchlistItem {
+  /// Canonical key, e.g. NSE:MRF.
+  instrumentKey String   @id
+  /// The shared Instrument contract.
+  instrument    Json
+  pinnedAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([pinnedAt])
+}

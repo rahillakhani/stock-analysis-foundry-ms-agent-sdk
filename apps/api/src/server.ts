@@ -11,11 +11,14 @@ import { IndexConstituents } from './market/indexConstituents.ts';
 import type { AnalysisRepository } from './repositories/analysisRepository.ts';
 import { InMemoryAnalysisRepository } from './repositories/inMemoryAnalysisRepository.ts';
 import { PrismaAnalysisRepository } from './repositories/prismaAnalysisRepository.ts';
+import { PrismaWatchlistRepository } from './repositories/prismaWatchlistRepository.ts';
+import { InMemoryWatchlistRepository, type WatchlistRepository } from './repositories/watchlistRepository.ts';
 import { YahooMarketData } from './market/yahooMarketData.ts';
 import { FixtureResearchProvider } from './research/fixtureResearchProvider.ts';
 import { MarketResearchProvider } from './research/marketResearchProvider.ts';
 import { AnalysisService } from './services/analysisService.ts';
 import { MarketService } from './services/marketService.ts';
+import { WatchlistService } from './services/watchlistService.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -39,6 +42,9 @@ const prisma = env.STORAGE === 'postgres' && env.DATABASE_URL ? createPrismaClie
 const repository: AnalysisRepository = prisma
   ? new PrismaAnalysisRepository(prisma, now)
   : new InMemoryAnalysisRepository(now);
+const watchlistRepository: WatchlistRepository = prisma
+  ? new PrismaWatchlistRepository(prisma, now)
+  : new InMemoryWatchlistRepository(now);
 const master = new InMemoryInstrumentMaster(FIXTURE_INSTRUMENTS);
 const live = env.RESEARCH_PROVIDER === 'live';
 // Separate Yahoo clients (each with its own request queue) so interactive search can't starve research, and vice versa.
@@ -57,6 +63,13 @@ const market = new MarketService({
   directory,
   now,
   logger: logger.child({ component: 'market' }),
+});
+const watchlist = new WatchlistService({
+  watchlist: watchlistRepository,
+  analyses: repository,
+  directory,
+  market: uiMarket,
+  logger: logger.child({ component: 'watchlist' }),
 });
 const service = new AnalysisService({
   repository,
@@ -78,6 +91,7 @@ const app = createApp({
   logger,
   service,
   market,
+  watchlist,
   readiness: async () => {
     if (prisma) await prisma.$queryRaw`SELECT 1`;
   },

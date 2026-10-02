@@ -7,6 +7,7 @@ import {
   MarketMovers,
   PriceChart,
   TimelineEntryView,
+  Watchlist,
   type DecisionIndicator,
   type Instrument,
 } from '@stock-analysis/shared';
@@ -150,4 +151,26 @@ export const liveQuote = (price = 152.5, time = '2026-10-01T03:52:00.000Z') =>
     previousClose: 150,
     marketState: 'REGULAR',
     time,
+  });
+
+export const watchlistWith = (...keys: string[]) =>
+  Watchlist.parse({
+    items: keys.map((key) => ({
+      instrumentKey: key,
+      name: key === 'NSE:TATASTEEL' ? 'Tata Steel Ltd' : `${key.split(':')[1]} Ltd`,
+      exchange: key.split(':')[0],
+      assetType: 'EQUITY',
+      pinnedAt: '2026-10-01T09:00:00.000Z',
+      quote: { currency: 'INR', price: 152.5, change: -2.5, changePct: -1.61, marketState: 'REGULAR' },
+      latest:
+        key === 'NSE:TATASTEEL'
+          ? {
+              lastAnalysedAt: '2026-09-30T10:00:02.000Z',
+              indicator: 'NEUTRAL',
+              confidenceScore: 40.9,
+              policyVersion: 'v2',
+              runStatus: 'PARTIAL',
+            }
+          : null,
+    })),
   });

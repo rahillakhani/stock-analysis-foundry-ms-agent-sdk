@@ -7,6 +7,7 @@ import {
   MarketMovers,
   PriceChart,
   SearchResponse,
+  Watchlist,
   type AnalysedStock,
   type ChartInterval,
   type InstrumentSummary,
@@ -43,6 +44,9 @@ export interface ApiClient {
   movers(signal?: AbortSignal): Promise<MarketMovers>;
   chart(instrumentKey: string, interval: ChartInterval, signal?: AbortSignal): Promise<PriceChart>;
   quote(instrumentKey: string, signal?: AbortSignal): Promise<LiveQuote>;
+  watchlist(signal?: AbortSignal): Promise<Watchlist>;
+  pin(instrumentKey: string): Promise<Watchlist>;
+  unpin(instrumentKey: string): Promise<Watchlist>;
 }
 
 /**
@@ -82,6 +86,9 @@ export function createApiClient(fetchImpl: typeof fetch = fetch, basePath = '/ap
     chart: (key, interval, signal) =>
       request(PriceChart, `/market/chart/${encodeURIComponent(key)}?interval=${interval}`, { signal }),
     quote: (key, signal) => request(LiveQuote, `/market/quote/${encodeURIComponent(key)}`, { signal }),
+    watchlist: (signal) => request(Watchlist, '/watchlist', { signal }),
+    pin: (key) => request(Watchlist, `/watchlist/${encodeURIComponent(key)}`, { method: 'PUT' }),
+    unpin: (key) => request(Watchlist, `/watchlist/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   };
 }
 

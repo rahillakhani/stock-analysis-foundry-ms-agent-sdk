@@ -15,6 +15,7 @@ import {
   RUN_ID,
   analysedStocks,
   timelineEntry,
+  watchlistWith,
 } from './test/fixtures.ts';
 import { API, marketHandlers, recordingChart } from './test/marketHandlers.ts';
 
@@ -235,11 +236,77 @@ describe('App: market panels', () => {
     expect(chart.compareDocumentPosition(screen.getByRole('article')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(await within(chart).findByTestId('live-price')).toHaveTextContent('₹152.50');
 
-    const searched = screen.getByRole('complementary', { name: 'Searched stocks' });
+    const searched = screen.getByRole('complementary', { name: 'Watchlist and searched stocks' });
     await userEvent.click(await within(searched).findByRole('button', { name: /Tata Steel Ltd/ }));
     await waitFor(() =>
       expect(calls.filter((c) => c.path.endsWith('/stock/lookup')).at(-1)?.body).toEqual({ query: 'NSE:TATASTEEL' }),
     );
+  });
+});
+
+describe('App: watchlist', () => {
+  it('pins the viewed stock, shows it with price and signal, and unpins it', async () => {
+    let pinned: string[] = [];
+    server.use(
+      lookupSequence(resolvedExisting()),
+      http.get(`${API}/watchlist`, () => HttpResponse.json(watchlistWith(...pinned))),
+      http.put(`${API}/watchlist/:key`, ({ params }) => {
+        pinned = [String(params.key)];
+        return HttpResponse.json(watchlistWith(...pinned));
+      }),
+      http.delete(`${API}/watchlist/:key`, () => {
+        pinned = [];
+        return HttpResponse.json(watchlistWith());
+      }),
+    );
+    renderApp();
+    const user = await submit('Tata Steel');
+    await user.click(await screen.findByRole('button', { name: 'View existing' }));
+
+    const panel = screen.getByRole('region', { name: 'Watchlist' });
+    expect(await within(panel).findByText(/Pin a stock/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Pin Tata Steel Ltd to watchlist' }));
+
+    expect(await screen.findByRole('button', { name: 'Unpin Tata Steel Ltd from watchlist' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    const row = await within(panel).findByRole('button', { name: /NSE:TATASTEEL/ });
+    expect(row).toHaveTextContent('₹152.50');
+    expect(row).toHaveTextContent('−1.61%');
+    expect(row).toHaveTextContent('NEUTRAL');
+    expect(row).toHaveTextContent('40.9% confidence · policy v2 · partial data');
+    expect(calls.find((c) => c.method === 'PUT')?.path).toBe('/api/v1/watchlist/NSE%3ATATASTEEL');
+
+    await user.click(within(panel).getByRole('button', { name: 'Unpin Tata Steel Ltd' }));
+    expect(await within(panel).findByText(/Pin a stock/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pin Tata Steel Ltd to watchlist' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+
+  it('explains a failed pin (e.g. a full watchlist)', async () => {
+    server.use(
+      lookupSequence(resolvedExisting()),
+      http.put(`${API}/watchlist/:key`, () =>
+        HttpResponse.json(
+          {
+            type: 'about:blank',
+            title: 'Conflict',
+            status: 409,
+            detail: 'The watchlist holds at most 50 instruments',
+            code: 'WATCHLIST_FULL',
+          },
+          { status: 409 },
+        ),
+      ),
+    );
+    renderApp();
+    const user = await submit('Tata Steel');
+    await user.click(await screen.findByRole('button', { name: 'View existing' }));
+    await user.click(screen.getByRole('button', { name: 'Pin Tata Steel Ltd to watchlist' }));
+    expect(await screen.findByText('The watchlist holds at most 50 instruments')).toBeInTheDocument();
   });
 });
 
