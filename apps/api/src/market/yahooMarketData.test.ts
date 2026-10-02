@@ -75,7 +75,13 @@ describe('YahooMarketData parsing', () => {
     const quote = vi.fn((symbols: string | string[]) =>
       Promise.resolve(
         Array.isArray(symbols)
-          ? [raw('A.NS', 'POSTPOST'), raw('B.NS', 'PREPRE'), { symbol: 'NAMELESS' }, raw('C.NS', 'CLOSED')]
+          ? [
+              raw('A.NS', 'POST'),
+              raw('B.NS', 'PRE'),
+              { symbol: 'NAMELESS' },
+              raw('C.NS', 'POSTPOST'),
+              raw('D.NS', 'PREPRE'),
+            ]
           : raw('A.NS', 'REGULAR'),
       ),
     );
@@ -88,10 +94,12 @@ describe('YahooMarketData parsing', () => {
       marketState: 'REGULAR',
     });
     const batch = await yahoo.quotes(['C.NS', 'A.NS', 'B.NS', 'A.NS']);
+    // PREPRE/POSTPOST are Yahoo's overnight states: closed, not an extended session.
     expect(batch.map((q) => [q.vendorSymbol, q.marketState])).toEqual([
       ['A.NS', 'POST'],
       ['B.NS', 'PRE'],
       ['C.NS', 'CLOSED'],
+      ['D.NS', 'CLOSED'],
     ]);
     // One batched request with de-duplicated symbols, served from cache regardless of order.
     await yahoo.quotes(['B.NS', 'C.NS', 'A.NS']);
@@ -115,6 +123,10 @@ describe('YahooMarketData parsing', () => {
       { date: '2026-10-01T03:45:00.000Z', open: 10, high: 11, low: 9, close: 10.5, volume: 100 },
     ]);
     expect(chart).toHaveBeenCalledWith('MRF.NS', { period1: from, interval: '5m' }, expect.anything());
+
+    // Callers pass `now - N days`; a later instant on the same start date is served from cache.
+    await yahoo.intradayBars('MRF.NS', new Date(from.getTime() + 60_000));
+    expect(chart).toHaveBeenCalledTimes(1);
   });
 
   it('drops a negative P/E and a P/S whose currencies differ (e.g. an ADR)', async () => {

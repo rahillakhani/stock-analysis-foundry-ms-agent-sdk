@@ -85,5 +85,8 @@ export function applyQuote(
   if (time === last.time) {
     return { ...last, high: Math.max(last.high, price), low: Math.min(last.low, price), close: price };
   }
+  // A new candle only while the session is trading: after the close the vendor may stamp the final print (or the
+  // current time) past the last bar, which would draw an invented flat candle.
+  if (quote.marketState !== 'REGULAR') return undefined;
   return isAfter(time, last.time) ? { time, open: price, high: price, low: price, close: price } : undefined;
 }

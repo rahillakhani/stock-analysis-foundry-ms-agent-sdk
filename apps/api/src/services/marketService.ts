@@ -94,7 +94,7 @@ export class MarketService {
         .slice(0, MOVERS_PER_SIDE),
       losers: movers
         .filter((m) => m.changePct < 0)
-        .sort((a, b) => byChange(b, a))
+        .sort((a, b) => a.changePct - b.changePct || a.symbol.localeCompare(b.symbol))
         .slice(0, MOVERS_PER_SIDE),
     };
   }

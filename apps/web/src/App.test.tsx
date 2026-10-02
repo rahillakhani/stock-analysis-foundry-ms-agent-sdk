@@ -243,6 +243,32 @@ describe('App: market panels', () => {
   });
 });
 
+describe('App: futures', () => {
+  it('shows no chart panel for a futures contract (no chart or quote exists for it)', async () => {
+    server.use(
+      noSuggestions,
+      lookupSequence({
+        status: 'RESOLVED',
+        instrument: {
+          exchange: 'NSE',
+          symbol: 'NIFTY',
+          name: 'Nifty 50 Futures 2026-10-27',
+          assetType: 'FUTURE',
+          contract: { expiry: '2026-10-27', lotSize: 75 },
+        },
+        instrumentKey: 'NSE:NIFTY:FUT:2026-10-27',
+        existing: null,
+      }),
+      http.post(`${API}/stock/analyze`, () => HttpResponse.json({ runId: RUN_ID, status: 'PENDING' }, { status: 202 })),
+      http.get(`${API}/analysis-runs/${RUN_ID}`, () => HttpResponse.json(inFlight('PENDING'))),
+    );
+    renderApp();
+    await submit('nifty fut');
+    await screen.findByRole('region', { name: 'Analysis in progress' });
+    expect(calls.filter((c) => c.path.includes('/market/quote') || c.path.includes('/market/chart'))).toEqual([]);
+  });
+});
+
 describe('App: lookup outcomes and errors', () => {
   it('offers candidates for partial input and looks up the chosen key', async () => {
     server.use(

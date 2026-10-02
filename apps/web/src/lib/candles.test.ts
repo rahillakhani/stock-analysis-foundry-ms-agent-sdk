@@ -63,6 +63,11 @@ describe('applyQuote', () => {
     expect(applyQuote(undefined, liveQuote(), '5m', 'NSE')).toBeUndefined();
   });
 
+  it('never opens a candle outside the regular session (after-close print or vendor-less time)', () => {
+    const closed = { ...liveQuote(148, '2026-10-01T10:05:00.000Z'), marketState: 'POST' as const };
+    expect(applyQuote(last, closed, '5m', 'NSE')).toBeUndefined();
+  });
+
   it('updates the daily candle of the same session', () => {
     const daily = { ...last, time: '2026-10-01' };
     expect(applyQuote(daily, liveQuote(140), '1d', 'NSE')).toEqual({ ...daily, low: 140, close: 140 });

@@ -84,8 +84,9 @@ const QuoteSchema = z.object({
 function marketStateOf(raw: string | undefined): VendorMarketState | undefined {
   if (!raw) return undefined;
   if (raw === 'REGULAR') return 'REGULAR';
-  if (raw.startsWith('PRE')) return 'PRE';
-  if (raw.startsWith('POST')) return 'POST';
+  // PREPRE and POSTPOST mean closed overnight, not an extended-hours session.
+  if (raw === 'PRE') return 'PRE';
+  if (raw === 'POST') return 'POST';
   return 'CLOSED';
 }
 
@@ -275,7 +276,8 @@ export class YahooMarketData implements MarketDataSource {
   }
 
   #bars(vendorSymbol: string, from: Date, interval: '1d' | '5m', ttl: number, signal?: AbortSignal): Promise<Bar[]> {
-    return this.#cached(`bars:${interval}:${vendorSymbol}:${from.toISOString()}`, ttl, signal, async (opts) => {
+    // Keyed by start date, not instant: callers pass `now - N days`, which differs on every call.
+    return this.#cached(`bars:${interval}:${vendorSymbol}:${toIsoDate(from)}`, ttl, signal, async (opts) => {
       const chart = await this.#client.chart(vendorSymbol, { period1: from, interval }, opts);
       return chart.quotes.flatMap((raw): Bar[] => {
         const bar = BarSchema.safeParse(raw);

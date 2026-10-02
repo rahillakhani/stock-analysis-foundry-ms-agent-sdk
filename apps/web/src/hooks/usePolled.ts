@@ -30,7 +30,11 @@ export function usePolled<T>(
 ): Polled<T> {
   const [slot, setSlot] = useState<Slot<T>>({ resetKey, settled: false });
   const [attempt, setAttempt] = useState(0);
-  const reload = useCallback(() => setAttempt((n) => n + 1), []);
+  const reload = useCallback(() => {
+    // Show loading again until the retry settles (the last good data, if any, stays visible).
+    setSlot((prev) => ({ ...prev, error: undefined, settled: prev.data !== undefined }));
+    setAttempt((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     let controller: AbortController | undefined;

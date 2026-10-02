@@ -221,7 +221,7 @@ export type Mover = z.infer<typeof Mover>;
 
 /** GET /api/v1/market/movers: top gainers and losers of an index universe for the latest session. */
 export const MarketMovers = z.object({
-  /** Which constituents were ranked, e.g. "NIFTY 50"; "fallback" when the official list was unreachable. */
+  /** Which constituents were ranked: "NIFTY 50", or "NIFTY 50 (snapshot)" when the official list was unreachable. */
   universe: z.string().min(1).max(60),
   marketState: MarketState,
   /** Time of the most recent quote used (the latest session's last trade when the market is closed). */
@@ -278,9 +278,15 @@ export const AnalysedStock = z.object({
   lastAnalysedAt: IsoDateTime,
   indicator: DecisionIndicator,
   confidenceScore: Score,
+  policyVersion: PolicyVersion,
+  /** PARTIAL: some research dimensions were unavailable for the latest analysis (data freshness at a glance). */
+  runStatus: z.enum(['SUCCEEDED', 'PARTIAL']),
 });
 export type AnalysedStock = z.infer<typeof AnalysedStock>;
 
-/** GET /api/v1/stocks : analysed stocks, most recently analysed first. */
+/**
+ * GET /api/v1/stocks : analysed stocks, most recently analysed first. A summary row: sources and per-metric freshness
+ * are on the full analysis, which the UI opens when a row is selected.
+ */
 export const AnalysedStocks = z.object({ stocks: z.array(AnalysedStock).max(100) });
 export type AnalysedStocks = z.infer<typeof AnalysedStocks>;

@@ -123,6 +123,8 @@ export const analysedStocks = (indicator: DecisionIndicator = 'DONT_BUY') =>
         lastAnalysedAt: '2026-09-30T10:00:02.000Z',
         indicator,
         confidenceScore: 75,
+        policyVersion: 'v2',
+        runStatus: 'PARTIAL',
       },
     ],
   });

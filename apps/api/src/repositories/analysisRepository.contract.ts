@@ -158,6 +158,8 @@ export function describeAnalysisRepositoryContract(
           lastAnalysedAt: '2026-09-30T11:00:00.000Z',
           indicator: decision.indicator,
           confidenceScore: decision.confidenceScore,
+          policyVersion: 'v1',
+          runStatus: 'PARTIAL',
         },
         expect.objectContaining({ instrumentKey: 'NSE:TESTCO', lastAnalysedAt: '2026-09-30T10:00:00.000Z' }),
       ]);

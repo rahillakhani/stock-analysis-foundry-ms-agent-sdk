@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApiClient } from '../api/client.ts';
-import { analysedStocks, liveQuote, TATA } from '../test/fixtures.ts';
+import { analysedStocks, intradayChart, liveQuote, TATA } from '../test/fixtures.ts';
 import { API, marketHandlers, recordingChart } from '../test/marketHandlers.ts';
 import { MarketMovers } from './MarketMovers.tsx';
 import { PriceChart } from './PriceChart.tsx';
@@ -55,6 +55,16 @@ describe('MarketMovers', () => {
     expect(await screen.findByRole('region', { name: 'Top gainers' })).toBeInTheDocument();
   });
 
+  it('shows loading again while a retry is in flight', async () => {
+    server.use(http.get(`${API}/market/movers`, () => problem(503)));
+    render(<MarketMovers api={api} onSelect={vi.fn()} />);
+    await screen.findByRole('alert');
+    server.use(http.get(`${API}/market/movers`, () => new Promise<never>(() => undefined)));
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Loading movers…')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('keeps the last movers when a refresh fails', async () => {
     render(<MarketMovers api={api} onSelect={vi.fn()} refreshMs={20} />);
     await screen.findByRole('region', { name: 'Top gainers' });
@@ -79,6 +89,9 @@ describe('RecentStocks', () => {
     expect(row).toHaveTextContent('BUY');
     expect(row).toHaveTextContent('75% confidence');
     expect(row.querySelector('time')).toHaveAttribute('dateTime', '2026-09-30T10:00:02.000Z');
+    expect(row).toHaveTextContent('policy v2');
+    // Freshness at a glance: the fixture run was PARTIAL and is days old.
+    expect(row).toHaveTextContent('partial data · may be out of date');
     expect(screen.getByText(/Not investment advice/)).toBeInTheDocument();
 
     await userEvent.click(row);
@@ -127,6 +140,52 @@ describe('PriceChart', () => {
     expect(record.removed).toBe(1);
     expect(record.intraday).toEqual([true, false]);
     expect(requests).toContain('/api/v1/market/chart/NSE%3ATATASTEEL?interval=1d');
+  });
+
+  it('never draws on a removed chart when the range is switched back quickly', async () => {
+    const { record, factory } = recordingChart();
+    const drawnAfterRemoval: number[] = [];
+    const guarded: typeof factory = async (container, options) => {
+      const chart = await factory(container, options);
+      let removed = false;
+      return {
+        setData: (c) => (removed ? drawnAfterRemoval.push(1) : chart.setData(c)),
+        update: (c) => (removed ? drawnAfterRemoval.push(1) : chart.update(c)),
+        remove: () => {
+          removed = true;
+          chart.remove();
+        },
+      };
+    };
+    server.use(
+      http.get(`${API}/market/chart/:key`, async ({ request }) => {
+        if (new URL(request.url).searchParams.get('interval') === '1d') await new Promise((r) => setTimeout(r, 200));
+        return HttpResponse.json(intradayChart);
+      }),
+    );
+    renderChart(guarded);
+    await waitFor(() => expect(record.data).toHaveLength(1));
+    await userEvent.click(screen.getByRole('button', { name: '1Y' }));
+    await userEvent.click(screen.getByRole('button', { name: '1D' }));
+    await waitFor(() => expect(record.data.length).toBeGreaterThanOrEqual(2));
+    expect(drawnAfterRemoval).toEqual([]);
+  });
+
+  it('shows an unchanged price as neither up nor down', async () => {
+    server.use(http.get(`${API}/market/quote/:key`, () => HttpResponse.json(liveQuote(150))));
+    renderChart();
+    expect(await screen.findByText('unchanged today')).toBeInTheDocument();
+  });
+
+  it('offers a retry when the chart cannot load', async () => {
+    let fail = true;
+    server.use(http.get(`${API}/market/chart/:key`, () => (fail ? problem(503) : HttpResponse.json(intradayChart))));
+    const { record, factory } = recordingChart();
+    renderChart(factory);
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    fail = false;
+    await userEvent.click(retry);
+    await waitFor(() => expect(record.data).toHaveLength(1));
   });
 
   it('polls the ticker', async () => {

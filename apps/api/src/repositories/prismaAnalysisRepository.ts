@@ -215,24 +215,28 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
           where: { status: { in: ['SUCCEEDED', 'PARTIAL'] } },
           orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
           take: 1,
-          select: { decisionIndicator: true, confidenceScore: true },
+          select: { status: true, decisionIndicator: true, confidenceScore: true, policyVersion: true },
         },
       },
     });
     return stocks.flatMap((stock) => {
       const run = stock.analysisRuns[0];
       if (!stock.lastAnalysedAt || !run) return [];
-      const instrument = Instrument.parse(stock.instrument);
-      return [
-        AnalysedStock.parse({
+      const instrument = Instrument.safeParse(stock.instrument);
+      // One unreadable row is left out rather than failing the whole list.
+      const row =
+        instrument.success &&
+        AnalysedStock.safeParse({
           instrumentKey: stock.instrumentKey,
-          name: instrument.name,
-          exchange: instrument.exchange,
+          name: instrument.data.name,
+          exchange: instrument.data.exchange,
           lastAnalysedAt: stock.lastAnalysedAt.toISOString(),
           indicator: run.decisionIndicator,
           confidenceScore: run.confidenceScore,
-        }),
-      ];
+          policyVersion: run.policyVersion,
+          runStatus: run.status,
+        });
+      return row && row.success ? [row.data] : [];
     });
   }
 

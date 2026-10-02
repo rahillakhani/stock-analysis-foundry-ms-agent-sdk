@@ -156,6 +156,8 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
         lastAnalysedAt: stock.lastAnalysedAt,
         indicator: run.decision.indicator,
         confidenceScore: run.decision.confidenceScore,
+        policyVersion: run.decision.policyVersion,
+        runStatus: run.status,
       });
     }
     return stocks;

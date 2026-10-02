@@ -1,5 +1,5 @@
 import type { AnalysedStock } from '@stock-analysis/shared';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { useCallback } from 'react';
 import { describeError, type ApiClient } from '../api/client.ts';
 import { usePolled } from '../hooks/usePolled.ts';
@@ -15,6 +15,8 @@ interface Props {
 }
 
 const REFRESH_MS = 60_000;
+/** A signal older than a day predates the latest session's prices. */
+const STALE_AFTER_SECONDS = 24 * 3600;
 
 /** Right column: stocks analysed before, newest first, each with its latest signal. Selecting one looks it up. */
 export function RecentStocks({ api, onSelect, refreshToken = '', refreshMs = REFRESH_MS }: Props) {
@@ -71,7 +73,9 @@ export function RecentStocks({ api, onSelect, refreshToken = '', refreshMs = REF
 }
 
 function StockRow({ stock, onSelect }: { stock: AnalysedStock; onSelect: (key: string) => void }) {
-  const age = formatAge(ageSince(stock.lastAnalysedAt));
+  const ageSeconds = ageSince(stock.lastAnalysedAt);
+  const age = formatAge(ageSeconds);
+  const stale = ageSeconds > STALE_AFTER_SECONDS;
   return (
     <button
       type="button"
@@ -82,15 +86,19 @@ function StockRow({ stock, onSelect }: { stock: AnalysedStock; onSelect: (key: s
         <span className="min-w-0 truncate font-medium text-ink">{stock.name}</span>
         <DecisionBadge indicator={stock.indicator} size="sm" />
       </span>
-      <span className="mt-0.5 flex justify-between gap-2 text-xs text-ink-3">
-        <span className="font-mono">{stock.instrumentKey}</span>
-        <span>
-          {stock.confidenceScore}% confidence ·{' '}
-          <time dateTime={stock.lastAnalysedAt} title={formatDateTime(stock.lastAnalysedAt)}>
-            {age}
-          </time>
-        </span>
+      <span className="mt-0.5 block font-mono text-xs text-ink-3">{stock.instrumentKey}</span>
+      <span className="block text-xs text-ink-3">
+        {stock.confidenceScore}% confidence · policy {stock.policyVersion} ·{' '}
+        <time dateTime={stock.lastAnalysedAt} title={formatDateTime(stock.lastAnalysedAt)}>
+          {age}
+        </time>
       </span>
+      {(stale || stock.runStatus === 'PARTIAL') && (
+        <span className="mt-0.5 flex items-center gap-1 text-xs text-ink-2">
+          <AlertTriangle aria-hidden="true" className="size-3.5 shrink-0" />
+          {[stock.runStatus === 'PARTIAL' && 'partial data', stale && 'may be out of date'].filter(Boolean).join(' · ')}
+        </span>
+      )}
     </button>
   );
 }

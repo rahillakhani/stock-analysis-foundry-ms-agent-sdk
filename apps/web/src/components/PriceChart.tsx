@@ -5,7 +5,7 @@ import {
   type Instrument,
   type LiveQuote,
 } from '@stock-analysis/shared';
-import { Loader2, TrendingDown, TrendingUp } from 'lucide-react';
+import { Loader2, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeMarketError, type ApiClient } from '../api/client.ts';
 import { usePolled } from '../hooks/usePolled.ts';
@@ -95,6 +95,7 @@ export function PriceChart({
   const last = useRef<Candle | undefined>(undefined);
   const [chart, setChart] = useState<{ instance: CandleChart; owner: string } | undefined>();
   const [chartError, setChartError] = useState(false);
+  const [drawAttempt, setDrawAttempt] = useState(0);
   const owner = `${instrumentKey}:${range}`;
   const intraday = range === '5m';
   const barsData = bars.data;
@@ -122,8 +123,10 @@ export function PriceChart({
     return () => {
       disposed = true;
       created?.remove();
+      // Never draw on a removed chart (e.g. switching 1Y -> 1D before the 1Y bars arrive).
+      setChart(undefined);
     };
-  }, [chartFactory, intraday, hasCandles, owner]);
+  }, [chartFactory, intraday, hasCandles, owner, drawAttempt]);
 
   // Full redraw whenever fresh bars arrive.
   useEffect(() => {
@@ -180,20 +183,34 @@ export function PriceChart({
           </p>
         )}
         {!bars.loading && !hasCandles && (
-          <p className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-ink-2">
-            {bars.error ? describeMarketError(bars.error) : 'No price history is available for this range.'}
-          </p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-sm text-ink-2">
+            <p>{bars.error ? describeMarketError(bars.error) : 'No price history is available for this range.'}</p>
+            {bars.error !== undefined && <RetryButton onClick={bars.reload} />}
+          </div>
         )}
         {chartError && (
-          <p className="absolute inset-0 flex items-center justify-center text-sm text-ink-2">
-            The chart could not be drawn.
-          </p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-ink-2">
+            <p>The chart could not be drawn.</p>
+            <RetryButton onClick={() => setDrawAttempt((n) => n + 1)} />
+          </div>
         )}
       </div>
       <p className="mt-2 text-xs text-ink-3">
         Prices from Yahoo Finance, may be delayed. Informational only; the chart does not affect the decision.
       </p>
     </section>
+  );
+}
+
+function RetryButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md border border-border px-3 py-1 text-ink hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus"
+    >
+      Retry
+    </button>
   );
 }
 
@@ -211,8 +228,8 @@ function Ticker({
   if (!quote) {
     return <p className="mt-1 text-sm text-ink-2">{loading ? 'Loading price…' : describeMarketError(error)}</p>;
   }
-  const rising = quote.change >= 0;
-  const Icon = rising ? TrendingUp : TrendingDown;
+  const direction = quote.change > 0 ? 'up' : quote.change < 0 ? 'down' : 'unchanged';
+  const Icon = { up: TrendingUp, down: TrendingDown, unchanged: Minus }[direction];
   return (
     <div className="mt-1">
       <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -222,12 +239,12 @@ function Ticker({
         <span
           className={cn(
             'inline-flex items-center gap-1 text-sm font-medium tabular-nums',
-            rising ? 'text-up' : 'text-down',
+            { up: 'text-up', down: 'text-down', unchanged: 'text-ink-2' }[direction],
           )}
         >
           <Icon aria-hidden="true" className="size-4" />
           {formatSignedPrice(quote.change)} ({formatPercent(quote.changePct)})
-          <span className="sr-only">{rising ? 'up' : 'down'} today</span>
+          <span className="sr-only">{direction} today</span>
         </span>
       </p>
       <p className="text-xs text-ink-3">

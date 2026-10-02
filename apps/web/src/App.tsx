@@ -46,7 +46,9 @@ function announcement(state: ResearchState): string {
 
 /** The instrument the user is looking at, if any: its chart stays at the top of the centre column. */
 function selected(state: ResearchState) {
-  return 'instrument' in state ? { instrument: state.instrument, instrumentKey: state.instrumentKey } : undefined;
+  // Futures have no chart or quote (the API answers 404 for them), so no chart panel.
+  if (!('instrument' in state) || state.instrument.assetType === 'FUTURE') return undefined;
+  return { instrument: state.instrument, instrumentKey: state.instrumentKey };
 }
 
 export function App({ api: injected, pollIntervalMs, searchDebounceMs, chartFactory }: Props) {

@@ -46,6 +46,8 @@ describe('market contracts', () => {
             lastAnalysedAt: T,
             indicator: 'DONT_BUY',
             confidenceScore: 40.9,
+            policyVersion: 'v2',
+            runStatus: 'SUCCEEDED',
           },
         ],
       }).success,

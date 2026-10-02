@@ -38,6 +38,7 @@ const RETRY_AFTER_MS = 5 * 60_000;
 /** A list far from the index size means a truncated or changed file; don't rank on it. */
 const MIN_CONSTITUENTS = 40;
 const MAX_CONSTITUENTS = 60;
+const MAX_BODY_CHARS = 256 * 1024;
 
 /**
  * Snapshot of NIFTY_50_URL (Company Name, Symbol and Series columns), captured 2026-10-02. Used only when the live
@@ -177,7 +178,13 @@ export class IndexConstituents {
         this.#onFallback(`HTTP ${response.status}`);
         return undefined;
       }
-      const parsed = parseConstituentsCsv(await response.text());
+      const body = await response.text();
+      // The real file is ~4 KB; anything far larger isn't it.
+      if (body.length > MAX_BODY_CHARS) {
+        this.#onFallback('constituents file too large');
+        return undefined;
+      }
+      const parsed = parseConstituentsCsv(body);
       if (!parsed) this.#onFallback('unrecognized constituents file');
       return parsed;
     } catch (err) {
