@@ -553,7 +553,12 @@ const CHECKS_BY_VERSION: Readonly<Record<string, readonly CheckDefinition[]>> = 
 });
 
 export function checksFor(policy: DecisionPolicy): readonly CheckDefinition[] {
-  const checks = CHECKS_BY_VERSION[policy.version];
-  if (!checks) throw new Error(`No checks registered for policy version ${policy.version}`);
+  return checksForVersion(policy.version);
+}
+
+/** The check set of a recorded policy version (e.g. from a stored decision). Throws for an unknown version. */
+export function checksForVersion(version: string): readonly CheckDefinition[] {
+  const checks = CHECKS_BY_VERSION[version];
+  if (!checks) throw new Error(`No checks registered for policy version ${version}`);
   return checks;
 }

@@ -9,6 +9,7 @@ import {
 } from '@stock-analysis/shared';
 import type { Logger } from 'pino';
 import { evaluate } from '../domain/decision/evaluate.ts';
+import { buyGuidance } from '../domain/decision/guidance.ts';
 import type { DecisionPolicy } from '../domain/decision/policy.ts';
 import {
   InstrumentLookupUnavailableError,
@@ -43,6 +44,13 @@ const FAILURES = {
   interrupted: { code: 'INTERRUPTED', message: 'The analysis was interrupted by a server restart. Please try again.' },
   stalled: { code: 'STALLED', message: 'The analysis stopped responding. Please try again.' },
 } as const;
+
+/** Completed runs carry "what would make this a BUY", derived from the decision under its own policy version. */
+function withGuidance(run: AnalysisRunView): AnalysisRunView {
+  return run.status === 'SUCCEEDED' || run.status === 'PARTIAL'
+    ? { ...run, buyGuidance: buyGuidance(run.decision) }
+    : run;
+}
 
 export function toSummary(instrument: Instrument): InstrumentSummary {
   return {
@@ -106,7 +114,7 @@ export class AnalysisService {
       status: 'RESOLVED',
       instrument,
       instrumentKey: key,
-      existing: { latestRun, timeline, ageSeconds, promptReanalysis: true },
+      existing: { latestRun: withGuidance(latestRun), timeline, ageSeconds, promptReanalysis: true },
     };
   }
 
@@ -155,7 +163,7 @@ export class AnalysisService {
     if (run && (run.status === 'PENDING' || run.status === 'RUNNING') && (await this.#closeIfStalled(run))) {
       return this.#deps.repository.getRun(runId);
     }
-    return run;
+    return run && withGuidance(run);
   }
 
   /**

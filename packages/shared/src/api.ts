@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { IsoDateTime, isUnique, Score } from './common.ts';
-import { DecisionIndicator, DecisionResult, decisionSourceIds, PolicyVersion } from './decision.ts';
+import { DecisionFactor, DecisionIndicator, DecisionResult, decisionSourceIds, PolicyVersion } from './decision.ts';
 import {
   ASSET_TYPES,
   Exchange,
@@ -77,11 +77,35 @@ const RunError = z.object({
   message: z.string().min(1).max(500),
 });
 
+/**
+ * What stands between the recorded decision and a BUY under its own policy, derived deterministically from the
+ * decision (never by the LLM). Blockers are the buy-rule and veto checks that failed or lacked data; every one must
+ * clear for the rules to say BUY. Improvements are scored checks that failed: they don't block BUY, they lower the
+ * subscores. Data completeness is the share of applicable checks that had usable data.
+ */
+export const BuyGuidance = z.object({
+  blockers: z
+    .array(
+      DecisionFactor.extend({
+        role: z.enum(['VETO', 'BUY_RULE']),
+        cause: z.enum(['FAILED', 'NO_DATA']),
+      }),
+    )
+    .max(100),
+  improvements: z.array(DecisionFactor).max(100),
+  dataCompletenessPct: z.number().min(0).max(100),
+  usableChecks: z.number().int().nonnegative(),
+  applicableChecks: z.number().int().nonnegative(),
+});
+export type BuyGuidance = z.infer<typeof BuyGuidance>;
+
 const completedRunFields = {
   completedAt: IsoDateTime,
   decision: DecisionResult,
   explanation: Explanation,
   sources: z.array(Source).max(500),
+  /** Derived when the run is read (not stored), so it always reflects the run's own policy version. */
+  buyGuidance: BuyGuidance.optional(),
 };
 
 /**

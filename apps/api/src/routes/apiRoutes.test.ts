@@ -286,6 +286,23 @@ describe('GET /api/v1/stocks', () => {
   });
 });
 
+describe('buy guidance on completed runs', () => {
+  it('is included when a run is read and in the existing analysis on lookup', async () => {
+    const ctx = setup();
+    const runId = await analyzeAndWait(ctx, 'NSE:TATASTEEL');
+
+    const run = AnalysisRunView.parse((await request(ctx.app).get(`/api/v1/analysis-runs/${runId}`)).body);
+    if (run.status !== 'SUCCEEDED' && run.status !== 'PARTIAL') throw new Error(`unexpected ${run.status}`);
+    expect(run.buyGuidance?.applicableChecks).toBe(run.decision.reasons.length + run.decision.riskFactors.length);
+    expect(run.buyGuidance?.blockers.length === 0).toBe(run.decision.indicator === 'BUY');
+
+    const lookup = LookupResponse.parse(
+      (await request(ctx.app).post('/api/v1/stock/lookup').send({ query: 'NSE:TATASTEEL' })).body,
+    );
+    expect(lookup.status === 'RESOLVED' && lookup.existing?.latestRun).toMatchObject({ buyGuidance: run.buyGuidance });
+  });
+});
+
 describe('GET /api/v1/analysis-runs/:id', () => {
   it('returns 404 for a well-formed id that does not exist', async () => {
     const { app } = setup();
