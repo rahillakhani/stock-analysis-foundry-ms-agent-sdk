@@ -15,7 +15,7 @@ export function DecisionBadge({ indicator, size = 'lg' }: { indicator: DecisionI
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md font-semibold tracking-wide',
+        'inline-flex shrink-0 items-center gap-1.5 rounded-md font-semibold tracking-wide whitespace-nowrap',
         size === 'lg' ? 'px-3 py-1.5 text-lg' : 'px-2 py-0.5 text-xs',
         className,
       )}

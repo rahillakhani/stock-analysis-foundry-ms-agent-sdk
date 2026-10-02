@@ -3,6 +3,7 @@ import { Loader2, TrendingDown, TrendingUp } from 'lucide-react';
 import { useCallback } from 'react';
 import { describeMarketError, type ApiClient } from '../api/client.ts';
 import { usePolled } from '../hooks/usePolled.ts';
+import { CollapsiblePanel, PANEL_PREVIEW_ITEMS, useViewMore } from './CollapsiblePanel.tsx';
 import { cn } from '../lib/cn.ts';
 import { formatDateTime, formatPercent, formatPrice, MARKET_STATE_LABEL } from '../lib/format.ts';
 
@@ -20,12 +21,9 @@ export function MarketMovers({ api, onSelect, refreshMs = REFRESH_MS }: Props) {
   const { data, error, loading, reload } = usePolled(load, refreshMs, 'movers');
 
   return (
-    <section aria-labelledby="movers-heading" className="rounded-lg border border-border p-4 text-sm">
-      <h2 id="movers-heading" className="font-semibold text-ink">
-        Top movers in India
-      </h2>
+    <CollapsiblePanel storageKey="movers" title="Top movers in India">
       {data ? (
-        <p className="mt-0.5 text-xs text-ink-3">
+        <p className="text-xs text-ink-3">
           {data.universe} · {MARKET_STATE_LABEL[data.marketState]} · as of {formatDateTime(data.asOf)}
         </p>
       ) : null}
@@ -56,7 +54,7 @@ export function MarketMovers({ api, onSelect, refreshMs = REFRESH_MS }: Props) {
           <MoverList title="Top losers" movers={data.losers} direction="down" onSelect={onSelect} />
         </>
       )}
-    </section>
+    </CollapsiblePanel>
   );
 }
 
@@ -72,6 +70,7 @@ function MoverList({
   onSelect: (instrumentKey: string) => void;
 }) {
   const Icon = direction === 'up' ? TrendingUp : TrendingDown;
+  const { visible, button, listId } = useViewMore(movers, PANEL_PREVIEW_ITEMS);
   return (
     <section aria-label={title} className="mt-4">
       <h3 className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-2">
@@ -81,29 +80,32 @@ function MoverList({
       {movers.length === 0 ? (
         <p className="text-xs text-ink-3">None today.</p>
       ) : (
-        <ol>
-          {movers.map((mover) => (
-            <li key={mover.instrumentKey}>
-              <button
-                type="button"
-                onClick={() => onSelect(mover.instrumentKey)}
-                aria-label={`${mover.name}, ${formatPercent(mover.changePct)}. Look up`}
-                className="flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus"
-              >
-                <span className="min-w-0">
-                  <span className="block font-medium text-ink">{mover.symbol}</span>
-                  <span className="block truncate text-xs text-ink-3">{mover.name}</span>
-                </span>
-                <span className="shrink-0 text-right tabular-nums">
-                  <span className="block text-ink">{formatPrice(mover.price)}</span>
-                  <span className={cn('block text-xs font-medium', direction === 'up' ? 'text-up' : 'text-down')}>
-                    {formatPercent(mover.changePct)}
+        <>
+          <ol id={listId}>
+            {visible.map((mover) => (
+              <li key={mover.instrumentKey}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(mover.instrumentKey)}
+                  aria-label={`${mover.name}, ${formatPercent(mover.changePct)}. Look up`}
+                  className="flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus"
+                >
+                  <span className="min-w-0">
+                    <span className="block font-medium text-ink">{mover.symbol}</span>
+                    <span className="block truncate text-xs text-ink-3">{mover.name}</span>
                   </span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ol>
+                  <span className="shrink-0 text-right tabular-nums">
+                    <span className="block text-ink">{formatPrice(mover.price)}</span>
+                    <span className={cn('block text-xs font-medium', direction === 'up' ? 'text-up' : 'text-down')}>
+                      {formatPercent(mover.changePct)}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ol>
+          {button}
+        </>
       )}
     </section>
   );

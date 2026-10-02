@@ -4,26 +4,28 @@ import type { WatchlistState } from '../hooks/useWatchlist.ts';
 import { describeError } from '../api/client.ts';
 import { cn } from '../lib/cn.ts';
 import { ageSince, formatAge, formatDateTime, formatPercent, formatPrice } from '../lib/format.ts';
+import { CollapsiblePanel, PANEL_PREVIEW_ITEMS, useViewMore } from './CollapsiblePanel.tsx';
 import { DecisionBadge } from './DecisionBadge.tsx';
 
 interface Props {
   watchlist: WatchlistState;
   onSelect: (instrumentKey: string) => void;
+  /** The instrument whose pin button is on screen: its errors are shown there instead. */
+  viewingKey?: string | undefined;
 }
 
+const NO_ITEMS: readonly WatchlistItem[] = [];
+
 /** Right column, top: pinned instruments with live price and latest signal. */
-export function WatchlistPanel({ watchlist, onSelect }: Props) {
+export function WatchlistPanel({ watchlist, onSelect, viewingKey }: Props) {
   const { data, error, loading, reload, actionError } = watchlist;
+  const { visible, button, listId } = useViewMore(data?.items ?? NO_ITEMS, PANEL_PREVIEW_ITEMS);
 
   return (
-    <section aria-labelledby="watchlist-heading" className="rounded-lg border border-border p-4 text-sm">
-      <h2 id="watchlist-heading" className="flex items-center gap-1.5 font-semibold text-ink">
-        <Star aria-hidden="true" className="size-4" /> Watchlist
-      </h2>
-
-      {actionError && (
-        <p role="alert" className="mt-2 text-xs text-ink-2">
-          {actionError}
+    <CollapsiblePanel storageKey="watchlist" title="Watchlist" icon={<Star aria-hidden="true" className="size-4" />}>
+      {actionError && actionError.key !== viewingKey && (
+        <p role="alert" className="text-xs text-ink-2">
+          {actionError.message}
         </p>
       )}
 
@@ -53,8 +55,8 @@ export function WatchlistPanel({ watchlist, onSelect }: Props) {
       {data && data.items.length > 0 && (
         <>
           {error !== undefined && <p className="mt-2 text-xs text-ink-3">Could not refresh; showing the last list.</p>}
-          <ul className="mt-2 space-y-1">
-            {data.items.map((item) => (
+          <ul id={listId} className="mt-2 space-y-1">
+            {visible.map((item) => (
               <li key={item.instrumentKey} className="flex items-start gap-1">
                 <WatchRow item={item} onSelect={onSelect} />
                 <button
@@ -63,13 +65,14 @@ export function WatchlistPanel({ watchlist, onSelect }: Props) {
                   disabled={watchlist.isBusy(item.instrumentKey)}
                   aria-label={`Unpin ${item.name}`}
                   title="Unpin"
-                  className="mt-1.5 rounded p-1 text-ink-3 hover:bg-surface-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+                  className="mt-0.5 rounded p-2.5 text-ink-3 hover:bg-surface-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
                 >
                   <X aria-hidden="true" className="size-3.5" />
                 </button>
               </li>
             ))}
           </ul>
+          {button}
           {data.items.some((i) => i.latest) && (
             <p className="mt-3 text-xs text-ink-3">
               Signals are as of each stock&apos;s last analysis. Not investment advice.
@@ -77,7 +80,7 @@ export function WatchlistPanel({ watchlist, onSelect }: Props) {
           )}
         </>
       )}
-    </section>
+    </CollapsiblePanel>
   );
 }
 
@@ -101,7 +104,7 @@ function WatchRow({ item, onSelect }: { item: WatchlistItem; onSelect: (key: str
         )}
       </span>
       <span className="flex items-center justify-between gap-2 text-xs text-ink-3">
-        <span className="font-mono">{item.instrumentKey}</span>
+        <span className="font-mono break-all">{item.instrumentKey}</span>
         {quote && direction && (
           <span
             className={cn(
@@ -147,21 +150,29 @@ export function PinButton({
 }) {
   const pinned = watchlist.isPinned(instrumentKey);
   const busy = watchlist.isBusy(instrumentKey);
+  const failure = watchlist.actionError?.key === instrumentKey ? watchlist.actionError.message : undefined;
   return (
-    <button
-      type="button"
-      onClick={() => watchlist.toggle(instrumentKey)}
-      disabled={busy || (watchlist.loading && !watchlist.data)}
-      aria-pressed={pinned}
-      aria-label={pinned ? `Unpin ${name} from watchlist` : `Pin ${name} to watchlist`}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-ink hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
-    >
-      {busy ? (
-        <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-      ) : (
-        <Star aria-hidden="true" className={cn('size-4', pinned && 'fill-current')} />
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={() => watchlist.toggle(instrumentKey)}
+        disabled={busy || (watchlist.loading && !watchlist.data)}
+        aria-pressed={pinned}
+        aria-label={pinned ? `Unpin ${name} from watchlist` : `Pin ${name} to watchlist`}
+        className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-ink hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+        ) : (
+          <Star aria-hidden="true" className={cn('size-4', pinned && 'fill-current')} />
+        )}
+        {pinned ? 'Pinned' : 'Pin to watchlist'}
+      </button>
+      {failure && (
+        <p role="alert" className="text-xs text-ink-2">
+          {failure}
+        </p>
       )}
-      {pinned ? 'Pinned' : 'Pin to watchlist'}
-    </button>
+    </div>
   );
 }

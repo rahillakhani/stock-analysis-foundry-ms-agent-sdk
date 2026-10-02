@@ -68,7 +68,10 @@ describe('useWatchlist', () => {
 
     act(() => result.current.toggle('NSE:AAA'));
     await waitFor(() =>
-      expect(result.current.actionError).toBe('Could not reach the server. Check that the API is running.'),
+      expect(result.current.actionError).toEqual({
+        key: 'NSE:AAA',
+        message: 'Could not reach the server. Check that the API is running.',
+      }),
     );
     act(() => result.current.toggle('NSE:AAA'));
     await waitFor(() => expect(result.current.actionError).toBeUndefined());

@@ -61,17 +61,18 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs, chartFact
   const viewing = 'instrument' in state ? { key: state.instrumentKey, name: state.instrument.name } : undefined;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold text-ink">Stock &amp; Futures Research</h1>
+    <div className="mx-auto max-w-7xl px-4 py-4 sm:py-8">
+      <header className="mb-4 sm:mb-6">
+        <h1 className="text-xl font-semibold text-ink sm:text-2xl">Stock &amp; Futures Research</h1>
         <p className="text-sm text-ink-2">
-          Search any NSE, BSE, NASDAQ, or NYSE stock (or an NSE index or futures contract) to see a rule-based BUY /
-          DON&apos;T BUY / NEUTRAL signal with its reasons.
+          Search any NSE, BSE, NASDAQ, or NYSE stock (or an index such as Nifty or Sensex, or its futures) to see a
+          rule-based BUY / DON&apos;T BUY / NEUTRAL signal with its reasons.
         </p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[15rem_minmax(0,1fr)_15rem] xl:grid-cols-[17rem_minmax(0,1fr)_17rem]">
-        <aside aria-label="Market movers" className="order-2 lg:order-1">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[15rem_minmax(0,1fr)_15rem] xl:grid-cols-[17rem_minmax(0,1fr)_17rem]">
+        {/* Phones stack research first, then your watchlist and searched stocks, then the market movers. */}
+        <aside aria-label="Market movers" className="order-3 min-w-0 lg:order-1">
           <MarketMovers api={api} onSelect={actions.lookup} />
         </aside>
 
@@ -204,8 +205,8 @@ export function App({ api: injected, pollIntervalMs, searchDebounceMs, chartFact
           </main>
         </div>
 
-        <aside aria-label="Watchlist and searched stocks" className="order-3 space-y-6">
-          <WatchlistPanel watchlist={watchlist} onSelect={actions.lookup} />
+        <aside aria-label="Watchlist and searched stocks" className="order-2 min-w-0 space-y-6 lg:order-3">
+          <WatchlistPanel watchlist={watchlist} onSelect={actions.lookup} viewingKey={viewing?.key} />
           <RecentStocks
             api={api}
             onSelect={actions.lookup}

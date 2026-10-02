@@ -25,6 +25,7 @@
   /* Price direction: candles and change text. Text use is always paired with an arrow icon and a sign. */
   --up: #0b7a3e;
   --down: #c0262d;
+  --accent-tint: #ebf2fc;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,6 +43,7 @@
     --critical-tint: #3b1a1a;
     --up: #3fb26f;
     --down: #f0646a;
+    --accent-tint: #16263b;
   }
 }
 
@@ -59,6 +61,7 @@
   --critical-tint: #3b1a1a;
   --up: #3fb26f;
   --down: #f0646a;
+  --accent-tint: #16263b;
 }
 
 @theme inline {
@@ -81,6 +84,7 @@
   --color-critical-tint: var(--critical-tint);
   --color-up: var(--up);
   --color-down: var(--down);
+  --color-accent-tint: var(--accent-tint);
 }
 
 body {

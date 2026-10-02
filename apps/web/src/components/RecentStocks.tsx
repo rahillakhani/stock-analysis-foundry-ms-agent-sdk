@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { describeError, type ApiClient } from '../api/client.ts';
 import { usePolled } from '../hooks/usePolled.ts';
 import { ageSince, formatAge, formatDateTime } from '../lib/format.ts';
+import { CollapsiblePanel, PANEL_PREVIEW_ITEMS, useViewMore } from './CollapsiblePanel.tsx';
 import { DecisionBadge } from './DecisionBadge.tsx';
 
 interface Props {
@@ -15,6 +16,7 @@ interface Props {
 }
 
 const REFRESH_MS = 60_000;
+const NO_ITEMS: readonly AnalysedStock[] = [];
 /** A signal older than a day predates the latest session's prices. */
 const STALE_AFTER_SECONDS = 24 * 3600;
 
@@ -23,13 +25,10 @@ export function RecentStocks({ api, onSelect, refreshToken = '', refreshMs = REF
   // refreshToken is part of the loader identity so a new token reloads immediately (keeping the current list).
   const load = useCallback((signal: AbortSignal) => api.stocks(signal), [api, refreshToken]); // eslint-disable-line react-hooks/exhaustive-deps
   const { data, error, loading, reload } = usePolled(load, refreshMs, 'stocks');
+  const { visible, button, listId } = useViewMore(data ?? NO_ITEMS, PANEL_PREVIEW_ITEMS);
 
   return (
-    <section aria-labelledby="recent-heading" className="rounded-lg border border-border p-4 text-sm">
-      <h2 id="recent-heading" className="font-semibold text-ink">
-        Searched stocks
-      </h2>
-
+    <CollapsiblePanel storageKey="searched" title="Searched stocks">
       {loading && !data && (
         <p className="mt-3 flex items-center gap-2 text-ink-2">
           <Loader2 aria-hidden="true" className="size-4 animate-spin" /> Loading…
@@ -56,19 +55,20 @@ export function RecentStocks({ api, onSelect, refreshToken = '', refreshMs = REF
       {data && data.length > 0 && (
         <>
           {error !== undefined && <p className="mt-2 text-xs text-ink-3">Could not refresh; showing the last list.</p>}
-          <ul className="mt-2 space-y-1">
-            {data.map((stock) => (
+          <ul id={listId} className="mt-2 space-y-1">
+            {visible.map((stock) => (
               <li key={stock.instrumentKey}>
                 <StockRow stock={stock} onSelect={onSelect} />
               </li>
             ))}
           </ul>
+          {button}
           <p className="mt-3 text-xs text-ink-3">
             Signals are as of each stock&apos;s last analysis. Not investment advice.
           </p>
         </>
       )}
-    </section>
+    </CollapsiblePanel>
   );
 }
 
@@ -86,7 +86,7 @@ function StockRow({ stock, onSelect }: { stock: AnalysedStock; onSelect: (key: s
         <span className="min-w-0 truncate font-medium text-ink">{stock.name}</span>
         <DecisionBadge indicator={stock.indicator} size="sm" />
       </span>
-      <span className="mt-0.5 block font-mono text-xs text-ink-3">{stock.instrumentKey}</span>
+      <span className="mt-0.5 block font-mono text-xs break-all text-ink-3">{stock.instrumentKey}</span>
       <span className="block text-xs text-ink-3">
         {stock.confidenceScore}% confidence · policy {stock.policyVersion} ·{' '}
         <time dateTime={stock.lastAnalysedAt} title={formatDateTime(stock.lastAnalysedAt)}>

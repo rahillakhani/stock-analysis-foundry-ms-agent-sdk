@@ -7,10 +7,11 @@ import {
 } from '@stock-analysis/shared';
 import { AlertTriangle, FlaskConical, Globe, RefreshCw } from 'lucide-react';
 import type { CompletedRun } from '../hooks/useResearch.ts';
-import { DIMENSION_LABEL, formatAge, formatDateTime, formatPrice } from '../lib/format.ts';
+import { DIMENSION_LABEL, formatAge, formatDateTime } from '../lib/format.ts';
 import { DecisionBadge } from './DecisionBadge.tsx';
 import { Disclaimer } from './Disclaimer.tsx';
 import { MetricsGrid } from './MetricsGrid.tsx';
+import { RiskReward } from './RiskReward.tsx';
 import { SourceList } from './SourceList.tsx';
 import { TimelineView } from './TimelineView.tsx';
 import { ConfidenceExplainer, WhenToBuy } from './WhenToBuy.tsx';
@@ -126,22 +127,7 @@ export function ResultView({ instrument, instrumentKey, run, timeline, ageSecond
 
       <WhenToBuy decision={decision} guidance={run.buyGuidance} liveData={live} />
 
-      {decision.riskReward && (
-        <section aria-label="Risk to reward" className="rounded-lg border border-border p-3 text-sm">
-          <h3 className="mb-1 font-semibold text-ink">
-            Risk-to-reward (hypothetical long entry): {decision.riskReward.ratio}
-          </h3>
-          <p className="tabular-nums text-ink-2">
-            Entry {formatPrice(decision.riskReward.entry, currency)} · Stop{' '}
-            {formatPrice(decision.riskReward.stop, currency)} · Target{' '}
-            {formatPrice(decision.riskReward.target, currency)}
-          </p>
-          <p className="mt-1 text-xs text-ink-3">
-            {decision.riskReward.method} Computed from the latest price and volatility for every signal; not a
-            recommendation to trade.
-          </p>
-        </section>
-      )}
+      {decision.riskReward && <RiskReward riskReward={decision.riskReward} currency={currency} />}
 
       <div className="grid gap-6 md:grid-cols-2">
         <FactorList title="Supporting factors" factors={decision.reasons} empty="None." />

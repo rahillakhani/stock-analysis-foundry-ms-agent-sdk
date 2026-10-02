@@ -6,8 +6,8 @@ import { usePolled, type Polled } from './usePolled.ts';
 export interface WatchlistState extends Polled<Watchlist> {
   isPinned(instrumentKey: string): boolean;
   isBusy(instrumentKey: string): boolean;
-  /** The last pin/unpin failure, as a user-facing message (cleared by the next success). */
-  actionError: string | undefined;
+  /** The last pin/unpin failure, as a user-facing message, and its key (cleared by the next success). */
+  actionError: { key: string; message: string } | undefined;
   toggle(instrumentKey: string): void;
 }
 
@@ -35,7 +35,7 @@ export function useWatchlist(api: ApiClient, refreshMs: number | null = REFRESH_
 
   const [confirmed, setConfirmed] = useState<{ list: Watchlist; basis: Watchlist | undefined } | undefined>();
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
-  const [actionError, setActionError] = useState<string | undefined>();
+  const [actionError, setActionError] = useState<WatchlistState['actionError']>();
 
   const current = confirmed && confirmed.basis === data ? confirmed.list : data;
   const isPinned = useCallback(
@@ -65,7 +65,7 @@ export function useWatchlist(api: ApiClient, refreshMs: number | null = REFRESH_
         },
         (err: unknown) => {
           done();
-          setActionError(describeError(err));
+          setActionError({ key, message: describeError(err) });
         },
       );
     },
