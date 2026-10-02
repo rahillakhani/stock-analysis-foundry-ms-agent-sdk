@@ -20,6 +20,11 @@ export function currencyFor(exchange: Exchange): 'INR' | 'USD' {
   return isIndianExchange(exchange) ? 'INR' : 'USD';
 }
 
+/** IANA time zone an exchange's sessions are held in. */
+export function timeZoneFor(exchange: Exchange): 'Asia/Kolkata' | 'America/New_York' {
+  return isIndianExchange(exchange) ? 'Asia/Kolkata' : 'America/New_York';
+}
+
 /** Exchange trading symbol, e.g. `TATASTEEL`, `M&M`, `BAJAJ-AUTO`, `NIFTY`. For a future, its underlying. */
 export const TradingSymbol = z.string().regex(/^[A-Z0-9][A-Z0-9&-]{0,19}$/, 'must be an uppercase exchange symbol');
 

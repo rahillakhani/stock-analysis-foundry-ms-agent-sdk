@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AnalysisRunView,
   Instrument,
+  type AnalysedStock,
   instrumentKey,
   ResearchSnapshot,
   TimelineEntryView,
@@ -11,6 +12,7 @@ import {
   assertDimensionsMatchStatus,
   buildCompletedView,
   buildFailedView,
+  clampStocksLimit,
   clampTimelineLimit,
   RunInFlightError,
   RunStateError,
@@ -134,6 +136,29 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
       .map((t) => structuredClone(t.entry))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     return Promise.resolve(ordered.slice(-clampTimelineLimit(limit)));
+  }
+
+  async listAnalysedStocks(limit?: number): Promise<AnalysedStock[]> {
+    const analysed = [...this.#stocks.values()]
+      .filter((s): s is StockRecord & { lastAnalysedAt: string } => s.lastAnalysedAt !== null)
+      .sort(
+        (a, b) => b.lastAnalysedAt.localeCompare(a.lastAnalysedAt) || a.instrumentKey.localeCompare(b.instrumentKey),
+      )
+      .slice(0, clampStocksLimit(limit));
+    const stocks: AnalysedStock[] = [];
+    for (const stock of analysed) {
+      const run = await this.getLatestCompletedRun(stock.id);
+      if (!run || !('decision' in run)) continue;
+      stocks.push({
+        instrumentKey: stock.instrumentKey,
+        name: stock.instrument.name,
+        exchange: stock.instrument.exchange,
+        lastAnalysedAt: stock.lastAnalysedAt,
+        indicator: run.decision.indicator,
+        confidenceScore: run.decision.confidenceScore,
+      });
+    }
+    return stocks;
   }
 
   failInFlightRuns(failure: RunFailure): Promise<number> {

@@ -136,6 +136,34 @@ export function describeAnalysisRepositoryContract(
       expect(latest).toMatchObject({ id: second.id, status: 'PARTIAL', unavailableDimensions: ['sentiment'] });
     });
 
+    it('lists analysed stocks newest first with their latest decision, skipping never-completed ones', async () => {
+      const older = await repo.upsertStock(TESTCO);
+      const newer = await repo.upsertStock(OTHERCO);
+      const pending = await repo.upsertStock({ ...OTHERCO, symbol: 'PENDINGCO' });
+      expect(await repo.listAnalysedStocks()).toEqual([]);
+
+      await repo.completeRun((await repo.createRun(older.id)).id, completed());
+      clock.set('2026-09-30T11:00:00.000Z');
+      const failed = await repo.createRun(newer.id);
+      await repo.failRun(failed.id, { code: 'ANALYSIS_FAILED', message: 'Failed.' });
+      await repo.completeRun((await repo.createRun(newer.id)).id, completed('PARTIAL'));
+      await repo.createRun(pending.id);
+
+      const decision = completed().decision;
+      expect(await repo.listAnalysedStocks()).toEqual([
+        {
+          instrumentKey: 'NSE:OTHERCO',
+          name: 'Other Co Ltd',
+          exchange: 'NSE',
+          lastAnalysedAt: '2026-09-30T11:00:00.000Z',
+          indicator: decision.indicator,
+          confidenceScore: decision.confidenceScore,
+        },
+        expect.objectContaining({ instrumentKey: 'NSE:TESTCO', lastAnalysedAt: '2026-09-30T10:00:00.000Z' }),
+      ]);
+      expect((await repo.listAnalysedStocks(1)).map((s) => s.instrumentKey)).toEqual(['NSE:OTHERCO']);
+    });
+
     it('enforces PARTIAL/SUCCEEDED dimension rules without changing the run', async () => {
       const stock = await repo.upsertStock(TESTCO);
       const run = await repo.createRun(stock.id);

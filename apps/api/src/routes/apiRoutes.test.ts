@@ -1,4 +1,10 @@
-import { AnalysisRunView, AnalyzeAccepted, LookupResponse, SearchResponse } from '@stock-analysis/shared';
+import {
+  AnalysedStocks,
+  AnalysisRunView,
+  AnalyzeAccepted,
+  LookupResponse,
+  SearchResponse,
+} from '@stock-analysis/shared';
 import { pino } from 'pino';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
@@ -260,6 +266,23 @@ describe('POST /api/v1/stock/analyze validation', () => {
     const res = await request(app).post('/api/v1/stock/analyze').send(body);
     expect(res.status).toBe(status);
     expect(res.headers['content-type']).toMatch(/problem\+json/);
+  });
+});
+
+describe('GET /api/v1/stocks', () => {
+  it('lists analysed stocks, newest first, with their latest decision', async () => {
+    const ctx = setup();
+    expect((await request(ctx.app).get('/api/v1/stocks')).body).toEqual({ stocks: [] });
+
+    await analyzeAndWait(ctx, 'NSE:TATASTEEL');
+    ctx.clock.advance(60_000);
+    await analyzeAndWait(ctx, 'NSE:TCS');
+
+    const res = await request(ctx.app).get('/api/v1/stocks');
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    const { stocks } = AnalysedStocks.parse(res.body);
+    expect(stocks.map((s) => s.instrumentKey)).toEqual(['NSE:TCS', 'NSE:TATASTEEL']);
   });
 });
 

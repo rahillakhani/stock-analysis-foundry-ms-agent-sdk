@@ -9,6 +9,7 @@ import {
   volumeRatio,
   type Bar,
 } from '../market/indicators.ts';
+import { exchangeDate } from '../market/exchangeTime.ts';
 import type { MarketDataSource, StatementRow } from '../market/marketData.ts';
 import { yahooSymbolFor } from '../market/symbols.ts';
 import { MarketDataError } from '../market/yahooMarketData.ts';
@@ -32,12 +33,6 @@ const DAY_MS = 86_400_000;
 const PRICE_HISTORY_DAYS = 3 * 365 + 30;
 const BREAKOUT_RANGE_WEEKS = 6;
 const TRADING_DAYS_PER_WEEK = 5;
-const EXCHANGE_TIME_ZONE = {
-  NSE: 'Asia/Kolkata',
-  BSE: 'Asia/Kolkata',
-  NASDAQ: 'America/New_York',
-  NYSE: 'America/New_York',
-} as const;
 
 const MISSING = { status: 'MISSING' as const, value: null };
 const NOT_APPLICABLE = { status: 'NOT_APPLICABLE' as const, value: null };
@@ -67,13 +62,6 @@ function sourceId(kind: string, vendorSymbol: string, asOf: Date): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
   return `yahoo:${kind}:${symbol}:${asOf.toISOString().slice(0, 10)}`;
-}
-
-/** Calendar date of an instant in the exchange's own time zone. */
-function exchangeDate(instant: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
-    instant,
-  );
 }
 
 type RatioKey = 'roePct' | 'debtToEquity' | 'rocePct' | 'netMarginPct' | 'revenueGrowthYoYPct';
@@ -331,12 +319,11 @@ export class MarketResearchProvider implements ResearchProvider {
     if (instrument.assetType === 'FUTURE') return { data: missing, sources: [] };
 
     const { asOf, signal } = ctx;
-    const timeZone = EXCHANGE_TIME_ZONE[instrument.exchange];
-    const sessionToday = exchangeDate(asOf, timeZone);
+    const sessionToday = exchangeDate(asOf, instrument.exchange);
     const from = new Date(asOf.getTime() - PRICE_HISTORY_DAYS * DAY_MS);
     // Only completed sessions: today's bar may be partial (intraday volume, live price).
     const bars: Bar[] = (await this.#market.dailyBars(this.#vendorSymbol(instrument), from, signal)).filter(
-      (bar) => bar.date <= asOf.toISOString() && exchangeDate(new Date(bar.date), timeZone) < sessionToday,
+      (bar) => bar.date <= asOf.toISOString() && exchangeDate(new Date(bar.date), instrument.exchange) < sessionToday,
     );
     const latest = bars.at(-1);
     if (!latest) return { data: missing, sources: [] };

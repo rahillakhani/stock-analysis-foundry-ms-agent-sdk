@@ -46,3 +46,21 @@ export const DIMENSION_LABEL = {
   derivatives: 'F&O',
   sentiment: 'Sentiment',
 } as const;
+
+/** "+1.40%" / "-1.40%" (the sign is always shown so direction never depends on colour). */
+export function formatPercent(value: number): string {
+  return `${value > 0 ? '+' : value < 0 ? '−' : ''}${Math.abs(value).toFixed(2)}%`;
+}
+
+/** "+1,755.00" / "−1,755.00": a price change without a currency symbol. */
+export function formatSignedPrice(value: number): string {
+  const magnitude = Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${value > 0 ? '+' : value < 0 ? '−' : ''}${magnitude}`;
+}
+
+export const MARKET_STATE_LABEL = {
+  PRE: 'Pre-open',
+  REGULAR: 'Market open',
+  POST: 'Market closed (post-close session)',
+  CLOSED: 'Market closed',
+} as const;

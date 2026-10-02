@@ -13,11 +13,12 @@ import {
   resolvedExisting,
   resolvedNew,
   RUN_ID,
+  analysedStocks,
   timelineEntry,
 } from './test/fixtures.ts';
+import { API, marketHandlers, recordingChart } from './test/marketHandlers.ts';
 
-const API = 'http://localhost:3000/api/v1';
-const server = setupServer();
+const server = setupServer(...marketHandlers);
 const calls: { method: string; path: string; body?: unknown }[] = [];
 
 beforeAll(() => {
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 afterAll(() => server.close());
 
-const renderApp = () => render(<App pollIntervalMs={5} searchDebounceMs={5} />);
+const renderApp = () => render(<App pollIntervalMs={5} searchDebounceMs={5} chartFactory={recordingChart().factory} />);
 
 async function submit(query: string) {
   const user = userEvent.setup();
@@ -211,6 +212,34 @@ describe('App: an existing analysis (spec step 1 prompt)', () => {
       instrumentKey: 'NSE:TATASTEEL',
       force: true,
     });
+  });
+});
+
+describe('App: market panels', () => {
+  it('looks up a mover or a searched stock on click and charts it above the analysis', async () => {
+    server.use(
+      lookupSequence(resolvedExisting()),
+      http.get(`${API}/stocks`, () => HttpResponse.json(analysedStocks())),
+    );
+    renderApp();
+
+    const movers = await screen.findByRole('complementary', { name: 'Market movers' });
+    await userEvent.click(await within(movers).findByRole('button', { name: /Infosys Ltd\./ }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path.endsWith('/stock/lookup'))?.body).toEqual({ query: 'NSE:INFY' }),
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'View existing' }));
+
+    // The chart sits above the analysis of the looked-up instrument.
+    const chart = await screen.findByRole('region', { name: 'Tata Steel Ltd price chart' });
+    expect(chart.compareDocumentPosition(screen.getByRole('article')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await within(chart).findByTestId('live-price')).toHaveTextContent('₹152.50');
+
+    const searched = screen.getByRole('complementary', { name: 'Searched stocks' });
+    await userEvent.click(await within(searched).findByRole('button', { name: /Tata Steel Ltd/ }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path.endsWith('/stock/lookup')).at(-1)?.body).toEqual({ query: 'NSE:TATASTEEL' }),
+    );
   });
 });
 

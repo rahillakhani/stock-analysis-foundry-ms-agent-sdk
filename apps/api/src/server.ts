@@ -7,6 +7,7 @@ import { FIXTURE_INSTRUMENTS } from './domain/instruments/fixtureInstruments.ts'
 import { InMemoryInstrumentMaster } from './domain/instruments/instrumentMaster.ts';
 import { InstrumentResolver } from './domain/instruments/resolveInstrument.ts';
 import { createLogger } from './logger.ts';
+import { IndexConstituents } from './market/indexConstituents.ts';
 import type { AnalysisRepository } from './repositories/analysisRepository.ts';
 import { InMemoryAnalysisRepository } from './repositories/inMemoryAnalysisRepository.ts';
 import { PrismaAnalysisRepository } from './repositories/prismaAnalysisRepository.ts';
@@ -14,6 +15,7 @@ import { YahooMarketData } from './market/yahooMarketData.ts';
 import { FixtureResearchProvider } from './research/fixtureResearchProvider.ts';
 import { MarketResearchProvider } from './research/marketResearchProvider.ts';
 import { AnalysisService } from './services/analysisService.ts';
+import { MarketService } from './services/marketService.ts';
 
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -44,9 +46,21 @@ const lookupMarket = live ? new YahooMarketData({ logger: logger.child({ compone
 const researchMarket = live
   ? new YahooMarketData({ logger: logger.child({ component: 'yahoo-research' }) })
   : undefined;
+const directory = new InstrumentDirectory(new InstrumentResolver(master, now), lookupMarket, logger);
+// The UI's movers, chart and ticker poll on a timer, so they get their own client too.
+const uiMarket = live ? new YahooMarketData({ logger: logger.child({ component: 'yahoo-ui' }) }) : undefined;
+const market = new MarketService({
+  market: uiMarket,
+  constituents: new IndexConstituents({
+    onFallback: (reason) => logger.warn({ reason }, 'NIFTY 50 constituents unavailable; using the last good list'),
+  }),
+  directory,
+  now,
+  logger: logger.child({ component: 'market' }),
+});
 const service = new AnalysisService({
   repository,
-  directory: new InstrumentDirectory(new InstrumentResolver(master, now), lookupMarket, logger),
+  directory,
   provider: researchMarket ? new MarketResearchProvider(researchMarket) : new FixtureResearchProvider(master),
   policy: POLICY_V2,
   now,
@@ -63,6 +77,7 @@ try {
 const app = createApp({
   logger,
   service,
+  market,
   readiness: async () => {
     if (prisma) await prisma.$queryRaw`SELECT 1`;
   },

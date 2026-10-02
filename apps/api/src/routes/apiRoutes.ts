@@ -1,4 +1,5 @@
 import {
+  AnalysedStocks,
   AnalysisRunView,
   AnalyzeAccepted,
   AnalyzeRequest,
@@ -37,6 +38,10 @@ export function apiRouter(service: AnalysisService): Router {
     const { instrumentKey, force } = parseRequest(AnalyzeRequest, req.body);
     const accepted = AnalyzeAccepted.parse(await service.analyze(instrumentKey, force));
     res.status(202).location(`/api/v1/analysis-runs/${accepted.runId}`).json(accepted);
+  });
+
+  router.get('/stocks', async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(AnalysedStocks.parse({ stocks: await service.listAnalysedStocks() }));
   });
 
   router.get('/analysis-runs/:id', async (req, res) => {

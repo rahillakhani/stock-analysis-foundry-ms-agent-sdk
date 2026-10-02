@@ -1,5 +1,6 @@
 import {
   instrumentKey,
+  type AnalysedStock,
   type AnalysisRunView,
   type AnalyzeAccepted,
   type Instrument,
@@ -73,6 +74,11 @@ export class AnalysisService {
 
   constructor(deps: AnalysisServiceDeps) {
     this.#deps = deps;
+  }
+
+  /** Analysed stocks, most recently analysed first, with their latest decision. */
+  listAnalysedStocks(): Promise<AnalysedStock[]> {
+    return this.#deps.repository.listAnalysedStocks();
   }
 
   async search(query: string): Promise<InstrumentSummary[]> {

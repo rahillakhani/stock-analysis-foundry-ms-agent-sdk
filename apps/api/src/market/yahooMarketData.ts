@@ -8,6 +8,7 @@ import type {
   NewsItem,
   StatementRow,
   Valuation,
+  VendorMarketState,
 } from './marketData.ts';
 
 // Yahoo Finance via the unofficial `yahoo-finance2` client. Yahoo publishes no official API and its terms restrict
@@ -30,7 +31,8 @@ export class MarketDataError extends Error {
 /** The subset of the yahoo-finance2 client this adapter uses (injectable for offline tests). */
 export interface YahooClient {
   search(query: string, options: object, moduleOptions: object): Promise<{ quotes: unknown[]; news: unknown[] }>;
-  quote(symbol: string, options: object, moduleOptions: object): Promise<unknown>;
+  /** A single symbol returns one quote; an array returns an array (one batched request). */
+  quote(symbol: string | string[], options: object, moduleOptions: object): Promise<unknown>;
   chart(symbol: string, options: object, moduleOptions: object): Promise<{ quotes: unknown[] }>;
   fundamentalsTimeSeries(symbol: string, options: object, moduleOptions: object): Promise<unknown[]>;
   quoteSummary(symbol: string, options: object, moduleOptions: object): Promise<Record<string, unknown>>;
@@ -72,10 +74,42 @@ const QuoteSchema = z.object({
   currency: z.string().optional(),
   regularMarketPrice: optionalNumber,
   regularMarketTime: dateLike.optional().catch(undefined),
+  regularMarketChange: optionalNumber,
+  regularMarketChangePercent: optionalNumber,
+  regularMarketPreviousClose: optionalNumber,
+  marketState: z.string().optional().catch(undefined),
 });
+
+/** Yahoo reports PREPRE/POSTPOST etc. for extended phases; normalize to our four states. */
+function marketStateOf(raw: string | undefined): VendorMarketState | undefined {
+  if (!raw) return undefined;
+  if (raw === 'REGULAR') return 'REGULAR';
+  if (raw.startsWith('PRE')) return 'PRE';
+  if (raw.startsWith('POST')) return 'POST';
+  return 'CLOSED';
+}
+
+function toQuote(q: z.infer<typeof QuoteSchema>): MarketQuote | undefined {
+  const name = q.longName ?? q.shortName;
+  if (!name) return undefined;
+  return {
+    vendorSymbol: q.symbol,
+    exchangeCode: q.exchange,
+    quoteType: q.quoteType,
+    name,
+    currency: q.currency,
+    price: q.regularMarketPrice,
+    time: q.regularMarketTime,
+    change: q.regularMarketChange,
+    changePct: q.regularMarketChangePercent,
+    previousClose: q.regularMarketPreviousClose,
+    marketState: marketStateOf(q.marketState),
+  };
+}
 
 const BarSchema = z.object({
   date: dateLike,
+  open: finiteNumber.nullable(),
   high: finiteNumber.nullable(),
   low: finiteNumber.nullable(),
   close: finiteNumber.nullable(),
@@ -117,7 +151,8 @@ interface CacheEntry {
 const MINUTE = 60_000;
 const TTL = {
   search: 10 * MINUTE,
-  quote: MINUTE,
+  // Short, so the live ticker stays current while repeated polls share one request.
+  quote: 15_000,
   bars: 5 * MINUTE,
   statements: 12 * 60 * MINUTE,
   valuation: 30 * MINUTE,
@@ -214,32 +249,41 @@ export class YahooMarketData implements MarketDataSource {
   quote(vendorSymbol: string, signal?: AbortSignal): Promise<MarketQuote | undefined> {
     return this.#cached(`quote:${vendorSymbol}`, TTL.quote, signal, async (opts) => {
       const parsed = QuoteSchema.safeParse(await this.#client.quote(vendorSymbol, {}, opts));
-      if (!parsed.success) return undefined;
-      const q = parsed.data;
-      const name = q.longName ?? q.shortName;
-      if (!name) return undefined;
-      return {
-        vendorSymbol: q.symbol,
-        exchangeCode: q.exchange,
-        quoteType: q.quoteType,
-        name,
-        currency: q.currency,
-        price: q.regularMarketPrice,
-        time: q.regularMarketTime,
-      };
+      return parsed.success ? toQuote(parsed.data) : undefined;
+    });
+  }
+
+  quotes(vendorSymbols: readonly string[], signal?: AbortSignal): Promise<MarketQuote[]> {
+    const symbols = [...new Set(vendorSymbols)].sort();
+    if (symbols.length === 0) return Promise.resolve([]);
+    return this.#cached(`quotes:${symbols.join(',')}`, TTL.quote, signal, async (opts) => {
+      const raw = await this.#client.quote(symbols, {}, opts);
+      return (Array.isArray(raw) ? (raw as unknown[]) : [raw]).flatMap((item): MarketQuote[] => {
+        const parsed = QuoteSchema.safeParse(item);
+        const quote = parsed.success ? toQuote(parsed.data) : undefined;
+        return quote ? [quote] : [];
+      });
     });
   }
 
   dailyBars(vendorSymbol: string, from: Date, signal?: AbortSignal): Promise<Bar[]> {
-    return this.#cached(`bars:${vendorSymbol}:${toIsoDate(from)}`, TTL.bars, signal, async (opts) => {
-      const chart = await this.#client.chart(vendorSymbol, { period1: from, interval: '1d' }, opts);
+    return this.#bars(vendorSymbol, from, '1d', TTL.bars, signal);
+  }
+
+  intradayBars(vendorSymbol: string, from: Date, signal?: AbortSignal): Promise<Bar[]> {
+    return this.#bars(vendorSymbol, from, '5m', TTL.quote, signal);
+  }
+
+  #bars(vendorSymbol: string, from: Date, interval: '1d' | '5m', ttl: number, signal?: AbortSignal): Promise<Bar[]> {
+    return this.#cached(`bars:${interval}:${vendorSymbol}:${from.toISOString()}`, ttl, signal, async (opts) => {
+      const chart = await this.#client.chart(vendorSymbol, { period1: from, interval }, opts);
       return chart.quotes.flatMap((raw): Bar[] => {
         const bar = BarSchema.safeParse(raw);
         if (!bar.success) return [];
-        const { date, high, low, close, volume } = bar.data;
-        // Yahoo emits null-filled rows for holidays; skip incomplete bars.
-        if (high === null || low === null || close === null || volume === null) return [];
-        return [{ date: date.toISOString(), high, low, close, volume }];
+        const { date, open, high, low, close, volume } = bar.data;
+        // Yahoo emits null-filled rows for holidays and not-yet-traded intervals; skip incomplete bars.
+        if (open === null || high === null || low === null || close === null || volume === null) return [];
+        return [{ date: date.toISOString(), open, high, low, close, volume }];
       });
     });
   }

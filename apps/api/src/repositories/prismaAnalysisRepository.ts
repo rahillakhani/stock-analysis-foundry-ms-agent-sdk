@@ -1,4 +1,5 @@
 import {
+  AnalysedStock,
   AnalysisRunView,
   Instrument,
   instrumentKey,
@@ -12,6 +13,7 @@ import {
   assertDimensionsMatchStatus,
   buildCompletedView,
   buildFailedView,
+  clampStocksLimit,
   clampTimelineLimit,
   isUuid,
   RunInFlightError,
@@ -201,6 +203,37 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
       include: { stock: true },
     });
     return run ? toRunView(run, run.stock) : null;
+  }
+
+  async listAnalysedStocks(limit?: number): Promise<AnalysedStock[]> {
+    const stocks = await this.#db.stock.findMany({
+      where: { lastAnalysedAt: { not: null } },
+      orderBy: [{ lastAnalysedAt: 'desc' }, { instrumentKey: 'asc' }],
+      take: clampStocksLimit(limit),
+      include: {
+        analysisRuns: {
+          where: { status: { in: ['SUCCEEDED', 'PARTIAL'] } },
+          orderBy: [{ completedAt: 'desc' }, { id: 'desc' }],
+          take: 1,
+          select: { decisionIndicator: true, confidenceScore: true },
+        },
+      },
+    });
+    return stocks.flatMap((stock) => {
+      const run = stock.analysisRuns[0];
+      if (!stock.lastAnalysedAt || !run) return [];
+      const instrument = Instrument.parse(stock.instrument);
+      return [
+        AnalysedStock.parse({
+          instrumentKey: stock.instrumentKey,
+          name: instrument.name,
+          exchange: instrument.exchange,
+          lastAnalysedAt: stock.lastAnalysedAt.toISOString(),
+          indicator: run.decisionIndicator,
+          confidenceScore: run.confidenceScore,
+        }),
+      ];
+    });
   }
 
   async failInFlightRuns(failure: RunFailure): Promise<number> {

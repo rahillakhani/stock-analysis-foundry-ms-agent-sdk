@@ -1,7 +1,11 @@
 // Contract-valid API payloads for UI tests (parsed with the shared schemas so tests can't drift from the API).
 import {
+  AnalysedStocks,
   AnalysisRunView,
+  LiveQuote,
   LookupResponse,
+  MarketMovers,
+  PriceChart,
   TimelineEntryView,
   type DecisionIndicator,
   type Instrument,
@@ -87,3 +91,61 @@ export const failedRun = AnalysisRunView.parse({
   completedAt: '2026-09-30T10:00:01.000Z',
   error: { code: 'ANALYSIS_FAILED', message: 'The analysis could not be completed. Please try again.' },
 });
+
+// Market panels -------------------------------------------------------------------------------------------------
+
+export const movers = MarketMovers.parse({
+  universe: 'NIFTY 50',
+  marketState: 'POST',
+  asOf: '2026-10-01T10:00:00.000Z',
+  gainers: [
+    { instrumentKey: 'NSE:INFY', symbol: 'INFY', name: 'Infosys Ltd.', price: 1523.4, change: 60.2, changePct: 4.11 },
+  ],
+  losers: [
+    {
+      instrumentKey: 'NSE:BAJAJ-AUTO',
+      symbol: 'BAJAJ-AUTO',
+      name: 'Bajaj Auto Ltd.',
+      price: 8120,
+      change: -670.5,
+      changePct: -7.62,
+    },
+  ],
+});
+
+export const analysedStocks = (indicator: DecisionIndicator = 'DONT_BUY') =>
+  AnalysedStocks.parse({
+    stocks: [
+      {
+        instrumentKey: 'NSE:TATASTEEL',
+        name: 'Tata Steel Ltd',
+        exchange: 'NSE',
+        lastAnalysedAt: '2026-09-30T10:00:02.000Z',
+        indicator,
+        confidenceScore: 75,
+      },
+    ],
+  });
+
+/** Two 5-minute NSE bars: 09:15 and 09:20 IST on 1 Oct 2026. */
+export const intradayChart = PriceChart.parse({
+  instrumentKey: 'NSE:TATASTEEL',
+  currency: 'INR',
+  interval: '5m',
+  bars: [
+    { time: '2026-10-01T03:45:00.000Z', open: 150, high: 152, low: 149, close: 151, volume: 1000 },
+    { time: '2026-10-01T03:50:00.000Z', open: 151, high: 153, low: 150.5, close: 152, volume: 800 },
+  ],
+});
+
+export const liveQuote = (price = 152.5, time = '2026-10-01T03:52:00.000Z') =>
+  LiveQuote.parse({
+    instrumentKey: 'NSE:TATASTEEL',
+    currency: 'INR',
+    price,
+    change: price - 150,
+    changePct: ((price - 150) / 150) * 100,
+    previousClose: 150,
+    marketState: 'REGULAR',
+    time,
+  });

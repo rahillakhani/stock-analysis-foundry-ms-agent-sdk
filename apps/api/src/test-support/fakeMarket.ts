@@ -51,6 +51,7 @@ export function bars(end: Date, days = 300, start = 100, trend = 0.4): Bar[] {
     const close = start + i * trend + (i % 2 === 0 ? 0.3 : -0.3);
     return {
       date: new Date(end.getTime() - (days - 1 - i) * 86_400_000).toISOString(),
+      open: close - 0.2,
       high: close + 1,
       low: close - 1,
       close,
@@ -128,11 +129,55 @@ export class FakeMarketData implements MarketDataSource {
     const hit = Object.values(FAKE_HITS)
       .flat()
       .find((h) => h.vendorSymbol === vendorSymbol);
-    return Promise.resolve(hit ? { ...hit, currency: 'USD', price: 47.76, time: this.#asOf } : undefined);
+    return Promise.resolve(
+      hit
+        ? {
+            ...hit,
+            currency: 'USD',
+            price: 47.76,
+            time: this.#asOf,
+            change: 1.26,
+            changePct: 2.7097,
+            previousClose: 46.5,
+            marketState: 'REGULAR' as const,
+          }
+        : undefined,
+    );
   }
 
   dailyBars(): Promise<Bar[]> {
     return Promise.resolve(bars(this.#asOf));
+  }
+
+  intradayBars(): Promise<Bar[]> {
+    // 5-minute bars over the last day.
+    return Promise.resolve(
+      bars(this.#asOf, 75, 100, 0.05).map((bar, i) => ({
+        ...bar,
+        date: new Date(this.#asOf.getTime() - (74 - i) * 300_000).toISOString(),
+      })),
+    );
+  }
+
+  quotes(vendorSymbols: readonly string[]): Promise<MarketQuote[]> {
+    this.calls.push(`quotes:${vendorSymbols.length}`);
+    if (this.failQuote) return Promise.reject(new Error('yahoo down'));
+    return Promise.resolve(
+      vendorSymbols.map((vendorSymbol, i) => ({
+        vendorSymbol,
+        exchangeCode: 'NSI',
+        quoteType: 'EQUITY',
+        name: `${vendorSymbol.replace('.NS', '')} Ltd`,
+        currency: 'INR',
+        price: 100 + i,
+        time: this.#asOf,
+        // Spread of daily changes from -(n/2)% to +(n/2)%, deterministic.
+        changePct: i - vendorSymbols.length / 2,
+        change: (i - vendorSymbols.length / 2) * 1.0,
+        previousClose: 100,
+        marketState: 'REGULAR' as const,
+      })),
+    );
   }
 
   statements(_symbol: string, period: 'annual' | 'quarterly'): Promise<StatementRow[]> {

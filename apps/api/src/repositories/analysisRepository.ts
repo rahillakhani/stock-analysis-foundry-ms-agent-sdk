@@ -1,5 +1,6 @@
 import {
   AnalysisRunView,
+  type AnalysedStock,
   type DecisionResult,
   type Explanation,
   type Instrument,
@@ -22,6 +23,13 @@ export const TIMELINE_LIMIT = 500;
 
 export function clampTimelineLimit(limit: number | undefined): number {
   return Math.min(TIMELINE_LIMIT, Math.max(1, Math.trunc(limit ?? TIMELINE_LIMIT)));
+}
+
+/** Matches the AnalysedStocks contract cap. */
+export const ANALYSED_STOCKS_LIMIT = 100;
+
+export function clampStocksLimit(limit: number | undefined): number {
+  return Math.min(ANALYSED_STOCKS_LIMIT, Math.max(1, Math.trunc(limit ?? ANALYSED_STOCKS_LIMIT)));
 }
 
 export type ResearchDimension = 'fundamentals' | 'technicals' | 'derivatives' | 'sentiment';
@@ -81,6 +89,11 @@ export interface AnalysisRepository {
   getLatestCompletedRun(stockId: string): Promise<AnalysisRunView | null>;
   /** The latest `limit` entries (default and maximum: TIMELINE_LIMIT), returned oldest first. */
   getTimeline(stockId: string, limit?: number): Promise<TimelineEntryView[]>;
+  /**
+   * Stocks with at least one completed run, most recently analysed first (ties by instrument key), each with its
+   * latest completed decision. At most `limit` (default and maximum: ANALYSED_STOCKS_LIMIT).
+   */
+  listAnalysedStocks(limit?: number): Promise<AnalysedStock[]>;
   /**
    * Marks every PENDING/RUNNING run FAILED. Called at startup: runs in flight when the process stopped can never
    * finish, and would otherwise block their stock (one in-flight run per stock). Returns the number failed.

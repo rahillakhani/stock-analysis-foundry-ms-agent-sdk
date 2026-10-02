@@ -3,6 +3,7 @@ import { atr, breakoutUp, ema, rsiDivergence, rsiSeries, volumeRatio, type Bar }
 
 const bar = (close: number, extra: Partial<Bar> = {}): Bar => ({
   date: '2026-01-01',
+  open: close,
   high: close + 1,
   low: close - 1,
   close,

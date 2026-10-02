@@ -41,15 +41,80 @@ describe('YahooMarketData parsing', () => {
         chart: () =>
           Promise.resolve({
             quotes: [
-              { date: '2026-09-29T03:45:00.000Z', high: 11, low: 9, close: 10, volume: 100 },
-              { date: new Date('2026-09-30T03:45:00.000Z'), high: null, low: null, close: null, volume: null },
-              { date: Date.parse('2026-10-01T03:45:00.000Z'), high: 12, low: 10, close: 11, volume: 200 },
+              { date: '2026-09-29T03:45:00.000Z', open: 10, high: 11, low: 9, close: 10, volume: 100 },
+              {
+                date: new Date('2026-09-30T03:45:00.000Z'),
+                open: null,
+                high: null,
+                low: null,
+                close: null,
+                volume: null,
+              },
+              { date: Date.parse('2026-10-01T03:45:00.000Z'), open: 11, high: 12, low: 10, close: 11, volume: 200 },
             ],
           }),
       }),
     });
     const bars = await yahoo.dailyBars('MRF.NS', new Date('2026-01-01'));
     expect(bars.map((b) => b.date)).toEqual(['2026-09-29T03:45:00.000Z', '2026-10-01T03:45:00.000Z']);
+  });
+
+  it('maps live quote fields and normalizes extended-hours market states', async () => {
+    const raw = (symbol: string, marketState: string) => ({
+      symbol,
+      exchange: 'NSI',
+      quoteType: 'EQUITY',
+      longName: `${symbol} Ltd`,
+      currency: 'INR',
+      regularMarketPrice: 105,
+      regularMarketChange: 5,
+      regularMarketChangePercent: 5,
+      regularMarketPreviousClose: 100,
+      marketState,
+    });
+    const quote = vi.fn((symbols: string | string[]) =>
+      Promise.resolve(
+        Array.isArray(symbols)
+          ? [raw('A.NS', 'POSTPOST'), raw('B.NS', 'PREPRE'), { symbol: 'NAMELESS' }, raw('C.NS', 'CLOSED')]
+          : raw('A.NS', 'REGULAR'),
+      ),
+    );
+    const yahoo = new YahooMarketData({ client: client({ quote }) });
+
+    expect(await yahoo.quote('A.NS')).toMatchObject({
+      change: 5,
+      changePct: 5,
+      previousClose: 100,
+      marketState: 'REGULAR',
+    });
+    const batch = await yahoo.quotes(['C.NS', 'A.NS', 'B.NS', 'A.NS']);
+    expect(batch.map((q) => [q.vendorSymbol, q.marketState])).toEqual([
+      ['A.NS', 'POST'],
+      ['B.NS', 'PRE'],
+      ['C.NS', 'CLOSED'],
+    ]);
+    // One batched request with de-duplicated symbols, served from cache regardless of order.
+    await yahoo.quotes(['B.NS', 'C.NS', 'A.NS']);
+    expect(quote).toHaveBeenCalledTimes(2);
+    expect(quote).toHaveBeenLastCalledWith(['A.NS', 'B.NS', 'C.NS'], {}, expect.anything());
+    expect(await yahoo.quotes([])).toEqual([]);
+  });
+
+  it('requests 5-minute bars for intraday charts and keeps the open price', async () => {
+    const chart = vi.fn(() =>
+      Promise.resolve({
+        quotes: [
+          { date: '2026-10-01T03:45:00.000Z', open: 10, high: 11, low: 9, close: 10.5, volume: 100 },
+          { date: '2026-10-01T03:50:00.000Z', open: 10.5, high: null, low: null, close: null, volume: null },
+        ],
+      }),
+    );
+    const yahoo = new YahooMarketData({ client: client({ chart }) });
+    const from = new Date('2026-10-01T00:00:00.000Z');
+    expect(await yahoo.intradayBars('MRF.NS', from)).toEqual([
+      { date: '2026-10-01T03:45:00.000Z', open: 10, high: 11, low: 9, close: 10.5, volume: 100 },
+    ]);
+    expect(chart).toHaveBeenCalledWith('MRF.NS', { period1: from, interval: '5m' }, expect.anything());
   });
 
   it('drops a negative P/E and a P/S whose currencies differ (e.g. an ADR)', async () => {

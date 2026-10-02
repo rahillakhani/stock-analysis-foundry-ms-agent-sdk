@@ -3,6 +3,7 @@
 
 export interface Bar {
   date: string;
+  open: number;
   high: number;
   low: number;
   close: number;

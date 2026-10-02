@@ -1,8 +1,14 @@
 import {
+  AnalysedStocks,
   AnalysisRunView,
   AnalyzeAccepted,
+  LiveQuote,
   LookupResponse,
+  MarketMovers,
+  PriceChart,
   SearchResponse,
+  type AnalysedStock,
+  type ChartInterval,
   type InstrumentSummary,
 } from '@stock-analysis/shared';
 import { z } from 'zod';
@@ -33,6 +39,10 @@ export interface ApiClient {
   lookup(query: string, signal?: AbortSignal): Promise<LookupResponse>;
   analyze(instrumentKey: string, force: boolean, signal?: AbortSignal): Promise<AnalyzeAccepted>;
   getRun(runId: string, signal?: AbortSignal): Promise<AnalysisRunView>;
+  stocks(signal?: AbortSignal): Promise<AnalysedStock[]>;
+  movers(signal?: AbortSignal): Promise<MarketMovers>;
+  chart(instrumentKey: string, interval: ChartInterval, signal?: AbortSignal): Promise<PriceChart>;
+  quote(instrumentKey: string, signal?: AbortSignal): Promise<LiveQuote>;
 }
 
 /**
@@ -67,7 +77,21 @@ export function createApiClient(fetchImpl: typeof fetch = fetch, basePath = '/ap
         signal,
       }),
     getRun: (runId, signal) => request(AnalysisRunView, `/analysis-runs/${encodeURIComponent(runId)}`, { signal }),
+    stocks: async (signal) => (await request(AnalysedStocks, '/stocks', { signal })).stocks,
+    movers: (signal) => request(MarketMovers, '/market/movers', { signal }),
+    chart: (key, interval, signal) =>
+      request(PriceChart, `/market/chart/${encodeURIComponent(key)}?interval=${interval}`, { signal }),
+    quote: (key, signal) => request(LiveQuote, `/market/quote/${encodeURIComponent(key)}`, { signal }),
   };
+}
+
+/** A user-facing message for a market-data failure (the market panels degrade independently of research). */
+export function describeMarketError(err: unknown): string {
+  if (err instanceof ApiError && err.code === 'MARKET_DATA_DISABLED') {
+    return 'Live market data is turned off on this server (RESEARCH_PROVIDER=fixture).';
+  }
+  if (err instanceof TypeError) return 'Could not reach the server.';
+  return 'Market data is unavailable right now.';
 }
 
 /** A user-facing message for any failure; never exposes internals. */

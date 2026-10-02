@@ -199,3 +199,88 @@ export type AnalyzeRequestInput = z.input<typeof AnalyzeRequest>;
 
 export const AnalyzeAccepted = z.object({ runId: z.uuid(), status: z.enum(['PENDING', 'RUNNING']) });
 export type AnalyzeAccepted = z.infer<typeof AnalyzeAccepted>;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Market data for the UI (movers, chart, live quote) and the analysed-stocks list. Prices are in the listing's
+// trading currency; percentages are on a 0–100 scale (1.5 = 1.5%).
+// ---------------------------------------------------------------------------------------------------------------
+
+export const MARKET_STATES = ['PRE', 'REGULAR', 'POST', 'CLOSED'] as const;
+export const MarketState = z.enum(MARKET_STATES);
+export type MarketState = z.infer<typeof MarketState>;
+
+export const Mover = z.object({
+  instrumentKey: InstrumentKey,
+  symbol: TradingSymbol,
+  name: z.string().min(1).max(200),
+  price: z.number().positive(),
+  change: z.number(),
+  changePct: z.number(),
+});
+export type Mover = z.infer<typeof Mover>;
+
+/** GET /api/v1/market/movers: top gainers and losers of an index universe for the latest session. */
+export const MarketMovers = z.object({
+  /** Which constituents were ranked, e.g. "NIFTY 50"; "fallback" when the official list was unreachable. */
+  universe: z.string().min(1).max(60),
+  marketState: MarketState,
+  /** Time of the most recent quote used (the latest session's last trade when the market is closed). */
+  asOf: IsoDateTime,
+  gainers: z.array(Mover).max(10),
+  losers: z.array(Mover).max(10),
+});
+export type MarketMovers = z.infer<typeof MarketMovers>;
+
+export const CHART_INTERVALS = ['5m', '1d'] as const;
+export const ChartInterval = z.enum(CHART_INTERVALS);
+export type ChartInterval = z.infer<typeof ChartInterval>;
+
+export const PriceBar = z
+  .object({
+    time: IsoDateTime,
+    open: z.number().positive(),
+    high: z.number().positive(),
+    low: z.number().positive(),
+    close: z.number().positive(),
+    volume: z.number().nonnegative(),
+  })
+  .refine((bar) => bar.low <= Math.min(bar.open, bar.close) && bar.high >= Math.max(bar.open, bar.close), {
+    message: 'low/high must bound open and close',
+  });
+export type PriceBar = z.infer<typeof PriceBar>;
+
+/** GET /api/v1/market/chart/:key?interval= : OHLCV bars, oldest first. */
+export const PriceChart = z.object({
+  instrumentKey: InstrumentKey,
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  interval: ChartInterval,
+  bars: z.array(PriceBar).max(2_000),
+});
+export type PriceChart = z.infer<typeof PriceChart>;
+
+/** GET /api/v1/market/quote/:key : the live ticker (vendor-delayed). */
+export const LiveQuote = z.object({
+  instrumentKey: InstrumentKey,
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  price: z.number().positive(),
+  change: z.number(),
+  changePct: z.number(),
+  previousClose: z.number().positive().optional(),
+  marketState: MarketState,
+  time: IsoDateTime,
+});
+export type LiveQuote = z.infer<typeof LiveQuote>;
+
+export const AnalysedStock = z.object({
+  instrumentKey: InstrumentKey,
+  name: z.string().min(1).max(200),
+  exchange: Exchange,
+  lastAnalysedAt: IsoDateTime,
+  indicator: DecisionIndicator,
+  confidenceScore: Score,
+});
+export type AnalysedStock = z.infer<typeof AnalysedStock>;
+
+/** GET /api/v1/stocks : analysed stocks, most recently analysed first. */
+export const AnalysedStocks = z.object({ stocks: z.array(AnalysedStock).max(100) });
+export type AnalysedStocks = z.infer<typeof AnalysedStocks>;

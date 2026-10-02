@@ -8,10 +8,16 @@ export interface MarketSearchHit {
   name: string;
 }
 
+export type VendorMarketState = 'PRE' | 'REGULAR' | 'POST' | 'CLOSED';
+
 export interface MarketQuote extends MarketSearchHit {
   currency: string | undefined;
   price: number | undefined;
   time: Date | undefined;
+  change?: number | undefined;
+  changePct?: number | undefined;
+  previousClose?: number | undefined;
+  marketState?: VendorMarketState | undefined;
 }
 
 /** One reported period from the income statement and balance sheet (absolute values, reporting currency). */
@@ -46,6 +52,10 @@ export interface MarketDataSource {
   search(query: string, signal?: AbortSignal): Promise<MarketSearchHit[]>;
   quote(vendorSymbol: string, signal?: AbortSignal): Promise<MarketQuote | undefined>;
   dailyBars(vendorSymbol: string, from: Date, signal?: AbortSignal): Promise<Bar[]>;
+  /** 5-minute bars for the live chart (oldest first; incomplete bars skipped). */
+  intradayBars(vendorSymbol: string, from: Date, signal?: AbortSignal): Promise<Bar[]>;
+  /** Batch quotes (one request); symbols the vendor doesn't know are simply absent. */
+  quotes(vendorSymbols: readonly string[], signal?: AbortSignal): Promise<MarketQuote[]>;
   statements(
     vendorSymbol: string,
     period: 'annual' | 'quarterly',

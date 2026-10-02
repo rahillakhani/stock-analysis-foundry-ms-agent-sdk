@@ -110,6 +110,10 @@ Never commit a real `.env`; `apps/api/.env.example` holds placeholders only.
 | POST   | `/api/v1/stock/lookup`         | `{query}` → `NOT_FOUND` / `AMBIGUOUS` (candidates) / `RESOLVED` with any existing analysis |
 | POST   | `/api/v1/stock/analyze`        | `{instrumentKey, force?}` → `202 {runId}`; `409` `ANALYSIS_EXISTS` or `RUN_IN_FLIGHT`       |
 | GET    | `/api/v1/analysis-runs/:id`    | run status: `PENDING` → `RUNNING` → `SUCCEEDED` / `PARTIAL` / `FAILED`                       |
+| GET    | `/api/v1/stocks`               | analysed stocks, newest first, with their latest signal and confidence (max 100)            |
+| GET    | `/api/v1/market/movers`        | top 10 NIFTY 50 gainers and losers for the latest session (live data only)                 |
+| GET    | `/api/v1/market/chart/:key`    | `?interval=5m` (latest session) or `1d` (one year, default): OHLCV bars (live data only)    |
+| GET    | `/api/v1/market/quote/:key`    | live ticker: price, day change, market state (live data only)                              |
 
 Request and response shapes are the Zod contracts in `packages/shared/src/api.ts`; the API validates every response
 against them. Errors are `application/problem+json` (RFC 9457) with `requestId` and, where relevant, `code`, `runId`,
