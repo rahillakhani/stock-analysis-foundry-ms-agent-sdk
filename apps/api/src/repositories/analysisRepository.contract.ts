@@ -163,7 +163,13 @@ export function describeAnalysisRepositoryContract(
         },
         expect.objectContaining({ instrumentKey: 'NSE:TESTCO', lastAnalysedAt: '2026-09-30T10:00:00.000Z' }),
       ]);
-      expect((await repo.listAnalysedStocks(1)).map((s) => s.instrumentKey)).toEqual(['NSE:OTHERCO']);
+      expect((await repo.listAnalysedStocks({ limit: 1 })).map((s) => s.instrumentKey)).toEqual(['NSE:OTHERCO']);
+      // By key, regardless of recency.
+      expect(
+        (await repo.listAnalysedStocks({ keys: ['NSE:TESTCO', 'NSE:PENDINGCO', 'NSE:NOPE'], limit: 1 })).map(
+          (s) => s.instrumentKey,
+        ),
+      ).toEqual(['NSE:TESTCO']);
     });
 
     it('enforces PARTIAL/SUCCEEDED dimension rules without changing the run', async () => {

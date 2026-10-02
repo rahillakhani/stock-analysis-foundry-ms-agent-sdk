@@ -1,13 +1,12 @@
 import type { Watchlist } from '@stock-analysis/shared';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { describeError, type ApiClient } from '../api/client.ts';
 import { usePolled, type Polled } from './usePolled.ts';
 
 export interface WatchlistState extends Polled<Watchlist> {
   isPinned(instrumentKey: string): boolean;
-  /** The key being pinned or unpinned right now, if any. */
-  busyKey: string | undefined;
-  /** The last pin/unpin failure, as a user-facing message. */
+  isBusy(instrumentKey: string): boolean;
+  /** The last pin/unpin failure, as a user-facing message (cleared by the next success). */
   actionError: string | undefined;
   toggle(instrumentKey: string): void;
 }
@@ -15,44 +14,63 @@ export interface WatchlistState extends Polled<Watchlist> {
 const REFRESH_MS = 30_000;
 
 /**
- * The watchlist, shared by the pin button and the watchlist panel. A pin/unpin shows its result at once (the API
- * answers with the updated list's membership) and then reloads the list for prices and analyses.
+ * The watchlist, shared by the pin button and the watchlist panel. A pin/unpin response (the whole updated list)
+ * is shown at once and then replaced by a fresh load, which also brings prices and analyses.
+ *
+ * Ordering: the list from the latest *sent* request that has answered wins; an older response arriving later is
+ * ignored. A confirmed list stays until polled data newer than that response arrives; reload() aborts any poll
+ * that was already in flight, so a stale poll can't overwrite it.
  */
-export function useWatchlist(api: ApiClient, refreshMs = REFRESH_MS): WatchlistState {
+export function useWatchlist(api: ApiClient, refreshMs: number | null = REFRESH_MS): WatchlistState {
   const load = useCallback((signal: AbortSignal) => api.watchlist(signal), [api]);
   const polled = usePolled(load, refreshMs, 'watchlist');
-  // Membership from the latest pin/unpin response, until a later reload replaces it.
-  const [confirmed, setConfirmed] = useState<{ list: Watchlist; basis: Watchlist | undefined } | undefined>();
-  const [busyKey, setBusyKey] = useState<string | undefined>();
-  const [actionError, setActionError] = useState<string | undefined>();
   const { data, reload } = polled;
 
-  // A response newer than the polled data wins until the poll moves on.
+  const latestData = useRef(data);
+  useEffect(() => {
+    latestData.current = data;
+  }, [data]);
+  const sent = useRef(0);
+  const applied = useRef(0);
+
+  const [confirmed, setConfirmed] = useState<{ list: Watchlist; basis: Watchlist | undefined } | undefined>();
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
+  const [actionError, setActionError] = useState<string | undefined>();
+
   const current = confirmed && confirmed.basis === data ? confirmed.list : data;
   const isPinned = useCallback(
     (key: string) => current?.items.some((item) => item.instrumentKey === key) ?? false,
     [current],
   );
+  const isBusy = useCallback((key: string) => busy.has(key), [busy]);
 
   const toggle = useCallback(
     (key: string) => {
-      const pinned = isPinned(key);
-      setBusyKey(key);
-      setActionError(undefined);
-      (pinned ? api.unpin(key) : api.pin(key)).then(
+      const request = (sent.current += 1);
+      const done = () =>
+        setBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      setBusy((prev) => new Set(prev).add(key));
+      (isPinned(key) ? api.unpin(key) : api.pin(key)).then(
         (list) => {
-          setConfirmed({ list, basis: data });
-          setBusyKey(undefined);
+          done();
+          if (request < applied.current) return;
+          applied.current = request;
+          setActionError(undefined);
+          setConfirmed({ list, basis: latestData.current });
           reload();
         },
         (err: unknown) => {
+          done();
           setActionError(describeError(err));
-          setBusyKey(undefined);
         },
       );
     },
-    [api, data, isPinned, reload],
+    [api, isPinned, reload],
   );
 
-  return { ...polled, data: current, isPinned, busyKey, actionError, toggle };
+  return { ...polled, data: current, isPinned, isBusy, actionError, toggle };
 }

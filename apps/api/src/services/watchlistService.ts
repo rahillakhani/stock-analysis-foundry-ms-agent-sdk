@@ -4,6 +4,7 @@ import {
   InstrumentLookupUnavailableError,
   type InstrumentDirectory,
 } from '../domain/instruments/instrumentDirectory.ts';
+import { nearestLiveExpiry } from '../domain/instruments/resolveInstrument.ts';
 import { AppError } from '../http/errors.ts';
 import type { MarketDataSource, MarketQuote } from '../market/marketData.ts';
 import { yahooSymbolFor } from '../market/symbols.ts';
@@ -17,6 +18,7 @@ export interface WatchlistServiceDeps {
   directory: InstrumentDirectory;
   /** Undefined when live market data is off: items are listed without prices. */
   market: MarketDataSource | undefined;
+  now: () => Date;
   logger: Logger;
 }
 
@@ -34,7 +36,8 @@ export class WatchlistService {
     const pins = await this.#deps.watchlist.list();
     const [quotes, analysed] = await Promise.all([
       this.#quotes(pins.flatMap((p) => (p.instrument.assetType === 'FUTURE' ? [] : [vendorSymbol(p.instrument)]))),
-      this.#deps.analyses.listAnalysedStocks(),
+      // By key: a pinned stock keeps its signal however many others were analysed since.
+      this.#deps.analyses.listAnalysedStocks({ keys: pins.map((p) => p.instrumentKey) }),
     ]);
     const latestByKey = new Map(analysed.map((stock) => [stock.instrumentKey, stock]));
 
@@ -48,6 +51,9 @@ export class WatchlistService {
         exchange: instrument.exchange,
         assetType: instrument.assetType,
         pinnedAt,
+        expired:
+          instrument.assetType === 'FUTURE' &&
+          nearestLiveExpiry([instrument.contract.expiry], this.#deps.now()) === undefined,
         quote: move
           ? { currency: currencyFor(instrument.exchange), ...move, marketState: quote.marketState ?? 'CLOSED' }
           : null,

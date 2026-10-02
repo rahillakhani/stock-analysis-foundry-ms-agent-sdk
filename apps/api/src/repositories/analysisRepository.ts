@@ -32,6 +32,11 @@ export function clampStocksLimit(limit: number | undefined): number {
   return Math.min(ANALYSED_STOCKS_LIMIT, Math.max(1, Math.trunc(limit ?? ANALYSED_STOCKS_LIMIT)));
 }
 
+export interface AnalysedStocksQuery {
+  limit?: number;
+  keys?: readonly string[];
+}
+
 export type ResearchDimension = 'fundamentals' | 'technicals' | 'derivatives' | 'sentiment';
 
 /** Everything persisted when a run finishes with a decision. */
@@ -91,9 +96,10 @@ export interface AnalysisRepository {
   getTimeline(stockId: string, limit?: number): Promise<TimelineEntryView[]>;
   /**
    * Stocks with at least one completed run, most recently analysed first (ties by instrument key), each with its
-   * latest completed decision. At most `limit` (default and maximum: ANALYSED_STOCKS_LIMIT).
+   * latest completed decision. At most `limit` (default and maximum: ANALYSED_STOCKS_LIMIT). With `keys`, only
+   * those instruments are considered (so a specific stock is found however long ago it was analysed).
    */
-  listAnalysedStocks(limit?: number): Promise<AnalysedStock[]>;
+  listAnalysedStocks(options?: AnalysedStocksQuery): Promise<AnalysedStock[]>;
   /**
    * Marks every PENDING/RUNNING run FAILED. Called at startup: runs in flight when the process stopped can never
    * finish, and would otherwise block their stock (one in-flight run per stock). Returns the number failed.

@@ -1,29 +1,39 @@
 import type { BuyGuidance, DecisionResult } from '@stock-analysis/shared';
 import { CircleCheck, CircleSlash, HelpCircle, ShieldAlert } from 'lucide-react';
-import { formatPrice } from '../lib/format.ts';
 
 interface Props {
   decision: DecisionResult;
   guidance: BuyGuidance | undefined;
-  currency: 'INR' | 'USD';
-  /** Indian listings: some inputs (pledging, F&O, FII/DII flows) have no connected source yet. */
-  indian: boolean;
+  /** Research came from the live source, which doesn't carry some Indian disclosures (pledging, F&O). */
+  liveData: boolean;
 }
 
 const ROLE_LABEL = { VETO: 'Red flag', BUY_RULE: 'Buy rule' } as const;
 
+/** Checks whose data the live Yahoo source doesn't carry (docs/decision-policy-v2.md §3), by blocker code. */
+const UNSOURCED: Readonly<Record<string, string>> = {
+  PLEDGE_BELOW_MAX_UNAVAILABLE: 'promoter pledging',
+  PLEDGE_NOT_EXCESSIVE_UNAVAILABLE: 'promoter pledging',
+  LONG_BUILD_UP_UNAVAILABLE: 'F&O data',
+  NO_SHORT_BUILD_UP_UNAVAILABLE: 'F&O data',
+  NOT_IN_FNO_BAN_UNAVAILABLE: 'F&O data',
+};
+
 /**
- * "When to buy" under the documented rules: what must change for the rules to say BUY, and the rule-based price
- * levels. Everything here is derived from the recorded decision; nothing is a forecast or a recommendation.
+ * What must change for the documented rules to say BUY. Derived from the recorded decision; not a forecast, a
+ * recommendation, or a price target (the hypothetical risk-to-reward levels stay in their own section).
  */
-export function WhenToBuy({ decision, guidance, currency, indian }: Props) {
-  const rr = decision.riskReward;
-  const noDataBlockers = guidance?.blockers.filter((b) => b.cause === 'NO_DATA') ?? [];
+export function WhenToBuy({ decision, guidance, liveData }: Props) {
+  const noData = guidance?.blockers.filter((b) => b.cause === 'NO_DATA') ?? [];
+  // The engine's message says "data is stale (observed …)" for a stale reading, "data unavailable" otherwise.
+  const staleBlockers = noData.filter((b) => b.message.includes('data is stale')).length;
+  const missingBlockers = noData.length - staleBlockers;
+  const unsourced = [...new Set(noData.flatMap((b) => (UNSOURCED[b.code] ? [UNSOURCED[b.code]] : [])))] as string[];
 
   return (
     <section aria-labelledby="when-to-buy" className="rounded-lg border border-border p-4 text-sm">
       <h3 id="when-to-buy" className="font-semibold text-ink">
-        When to buy (by the rules)
+        When the rules would say BUY
       </h3>
 
       {decision.indicator === 'BUY' ? (
@@ -46,7 +56,7 @@ export function WhenToBuy({ decision, guidance, currency, indian }: Props) {
                   <span>
                     <span className="font-medium text-ink">
                       {ROLE_LABEL[blocker.role]}
-                      {blocker.cause === 'NO_DATA' ? ' (needs data)' : ''}:
+                      {blocker.cause === 'NO_DATA' ? ' (no usable data)' : ''}:
                     </span>{' '}
                     {blocker.message}
                   </span>
@@ -62,8 +72,8 @@ export function WhenToBuy({ decision, guidance, currency, indian }: Props) {
       {guidance && guidance.improvements.length > 0 && (
         <details className="mt-3">
           <summary className="cursor-pointer text-ink-2">
-            {guidance.improvements.length} scored check{guidance.improvements.length === 1 ? '' : 's'} would raise
-            confidence
+            {guidance.improvements.length} other check{guidance.improvements.length === 1 ? '' : 's'} failed (these
+            lower the section scores but don&apos;t block BUY)
           </summary>
           <ul className="mt-1 list-disc space-y-1 pl-5 text-ink-2">
             {guidance.improvements.map((factor) => (
@@ -73,36 +83,25 @@ export function WhenToBuy({ decision, guidance, currency, indian }: Props) {
         </details>
       )}
 
-      {rr && (
-        <div className="mt-3 rounded-md bg-surface-2 p-3">
-          <p className="font-medium text-ink">Rule-based levels (hypothetical long entry, risk-to-reward {rr.ratio})</p>
-          <p className="mt-0.5 tabular-nums text-ink-2">
-            Entry {formatPrice(rr.entry, currency)} · Stop {formatPrice(rr.stop, currency)} · Target{' '}
-            {formatPrice(rr.target, currency)}
-          </p>
-          <p className="mt-1 text-xs text-ink-3">{rr.method}</p>
-        </div>
-      )}
-
       <h4 className="mt-3 font-medium text-ink">Pointers</h4>
       <ul className="mt-1 list-disc space-y-1 pl-5 text-ink-2">
         <li>
           Re-analyse after quarterly results, a large price move, or a few sessions: signals use the latest completed
           session.
         </li>
-        {decision.indicator !== 'BUY' && rr && (
+        {staleBlockers > 0 && (
           <li>
-            These levels come from the latest price and its volatility (ATR). If the signal turns BUY later, re-analyse
-            for fresh levels instead of reusing these.
+            {staleBlockers} rule{staleBlockers === 1 ? ' uses' : 's use'} stale data: the source itself is out of date,
+            so re-analysing helps only once it publishes newer figures.
           </li>
         )}
-        {noDataBlockers.length > 0 && (
+        {missingBlockers > 0 && (
           <li>
-            {noDataBlockers.length} rule{noDataBlockers.length === 1 ? '' : 's'} can&apos;t clear until the data is
-            available
-            {indian
-              ? ': promoter pledging, F&O and FII/DII flows have no connected source yet, so Indian stocks are at most NEUTRAL.'
-              : '.'}
+            {missingBlockers} rule{missingBlockers === 1 ? ' has' : 's have'} no data from the current source
+            {unsourced.length > 0 && liveData
+              ? ` (${unsourced.join(', ')} ${unsourced.length === 1 ? 'is' : 'are'} not connected yet, so these can't clear for now)`
+              : ''}
+            .
           </li>
         )}
         <li>The rules never consider your goals, horizon or position size. Use them as a checklist, not advice.</li>
@@ -122,10 +121,10 @@ export function ConfidenceExplainer({
   const completeness = guidance
     ? `${guidance.dataCompletenessPct}% (${guidance.usableChecks} of ${guidance.applicableChecks} checks had usable data)`
     : undefined;
-  const failedVetoes = guidance?.blockers.filter((b) => b.role === 'VETO' && b.cause === 'FAILED').length ?? 0;
+  const failedVetoes = guidance?.blockers.filter((b) => b.role === 'VETO' && b.cause === 'FAILED').length;
   const byIndicator = {
     BUY: 'For BUY it is data completeness × the average section score: how much of the evidence was available and how much of it passed.',
-    DONT_BUY: `For DON'T BUY it is data completeness × the weight of the red flags (50, plus 25 per red flag, at most 100; here ${failedVetoes} red flag${failedVetoes === 1 ? '' : 's'}): how firmly the data backs the warning.`,
+    DONT_BUY: `For DON'T BUY it is data completeness × the weight of the red flags (50, plus 25 per red flag, at most 100${failedVetoes === undefined ? '' : `; here ${failedVetoes} red flag${failedVetoes === 1 ? '' : 's'}, so ${Math.min(100, 50 + 25 * failedVetoes)}`}): how firmly the data backs the warning.`,
     NEUTRAL:
       'For NEUTRAL it is data completeness × 50, so it never exceeds 50%. A low number mostly means data was missing, not that the stock is weak.',
   } as const;

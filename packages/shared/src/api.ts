@@ -327,6 +327,8 @@ export const WatchlistItem = z.object({
   exchange: Exchange,
   assetType: z.enum(['EQUITY', 'FUTURE', 'INDEX']),
   pinnedAt: IsoDateTime,
+  /** A futures contract past its expiry: it can no longer be looked up or analysed, only unpinned. */
+  expired: z.boolean(),
   /** Null when there is no live price (futures, live data off, or the vendor is unavailable). */
   quote: z
     .object({

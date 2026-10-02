@@ -1,7 +1,7 @@
 import { ResearchSnapshot, Watchlist, WATCHLIST_LIMIT } from '@stock-analysis/shared';
 import { pino } from 'pino';
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../app.ts';
 import { evaluate } from '../domain/decision/evaluate.ts';
 import { POLICY_V2 } from '../domain/decision/policy.ts';
@@ -15,7 +15,7 @@ import { WatchlistService } from '../services/watchlistService.ts';
 import { FakeMarketData } from '../test-support/fakeMarket.ts';
 import { strongEquity } from '../test-support/snapshots.ts';
 
-const NOW = new Date('2026-10-01T10:00:00.000Z');
+let NOW = new Date('2026-10-01T10:00:00.000Z');
 const silent = pino({ level: 'silent' });
 
 function setup(market: FakeMarketData | null = new FakeMarketData(NOW)) {
@@ -27,6 +27,7 @@ function setup(market: FakeMarketData | null = new FakeMarketData(NOW)) {
     silent,
   );
   const watchlist = new WatchlistService({
+    now: () => NOW,
     watchlist: watchlistRepo,
     analyses,
     directory,
@@ -95,6 +96,25 @@ describe('/api/v1/watchlist', () => {
 
     const off = setup(null);
     expect(body(await request(off.app).put('/api/v1/watchlist/NSE:TATASTEEL')).items[0]?.quote).toBeNull();
+  });
+
+  it('marks a pinned futures contract expired after its expiry (15:30 IST)', async () => {
+    const { app } = setup();
+    const key = encodeURIComponent('BSE:SENSEX:FUT:2026-10-29');
+    expect(body(await request(app).put(`/api/v1/watchlist/${key}`)).items[0]?.expired).toBe(false);
+    NOW = new Date('2026-10-29T10:00:00.000Z'); // 15:30 IST on expiry day
+    try {
+      expect(body(await request(app).get('/api/v1/watchlist')).items[0]?.expired).toBe(true);
+    } finally {
+      NOW = new Date('2026-10-01T10:00:00.000Z');
+    }
+  });
+
+  it("keeps a pinned stock's signal however many stocks were analysed after it", async () => {
+    const { app, analyses } = setup();
+    const listed = vi.spyOn(analyses, 'listAnalysedStocks');
+    await request(app).put('/api/v1/watchlist/NSE:TATASTEEL').expect(200);
+    expect(listed).toHaveBeenLastCalledWith({ keys: ['NSE:TATASTEEL'] });
   });
 
   it.each([

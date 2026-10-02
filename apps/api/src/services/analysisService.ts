@@ -47,9 +47,13 @@ const FAILURES = {
 
 /** Completed runs carry "what would make this a BUY", derived from the decision under its own policy version. */
 function withGuidance(run: AnalysisRunView): AnalysisRunView {
-  return run.status === 'SUCCEEDED' || run.status === 'PARTIAL'
-    ? { ...run, buyGuidance: buyGuidance(run.decision) }
-    : run;
+  if (run.status !== 'SUCCEEDED' && run.status !== 'PARTIAL') return run;
+  try {
+    return { ...run, buyGuidance: buyGuidance(run.decision) };
+  } catch {
+    // A policy version this build doesn't know (e.g. after a rollback): show the run without guidance.
+    return run;
+  }
 }
 
 export function toSummary(instrument: Instrument): InstrumentSummary {

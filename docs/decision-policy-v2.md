@@ -94,7 +94,9 @@ Completed runs are returned with `buyGuidance`, derived from the recorded decisi
   the rules to say BUY. Roles come from the check definitions of the decision's own policy version.
 - **Improvements:** scored-only checks that failed. They lower the subscores but never block BUY.
 - **Data completeness:** usable applicable checks ÷ applicable checks, the factor in every confidence formula (§4 of
-  v1). The UI uses it to explain the confidence figure. For example, DON'T BUY with one failed veto and 81.8%
-  completeness gives 0.818 × 50 = 40.9%.
+  v1). The UI uses it to explain the confidence figure. For example, NSE:MRF on 2026-10-02 was DON'T BUY with one
+  failed veto (weight min(100, 50 + 25 × 1) = 75) and 12 of 22 checks usable (54.5%): 0.545 × 75 = 40.9%.
+- Improvements change only the subscores. Confidence depends on the subscores only for BUY, so for NEUTRAL and
+  DON'T BUY clearing an improvement does not change confidence; the UI does not claim it would.
 
 Confidence is never a probability of a price rise; the UI says so next to the figure.

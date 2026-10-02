@@ -28,6 +28,14 @@ describeWatchlistRepositoryContract('postgres', (clock) =>
 );
 
 describe('PrismaWatchlistRepository', () => {
+  it('treats concurrent first pins of the same key as one pin', async () => {
+    const repo = new PrismaWatchlistRepository(db, createClock().now);
+    const instrument = { exchange: 'NSE', symbol: 'MRF', name: 'MRF Ltd', assetType: 'EQUITY' } as const;
+    const results = await Promise.allSettled(Array.from({ length: 5 }, () => repo.pin(instrument)));
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    expect(await repo.list()).toHaveLength(1);
+  });
+
   it('leaves out a row whose stored instrument is unreadable', async () => {
     const repo = new PrismaWatchlistRepository(db, createClock().now);
     await repo.pin({ exchange: 'NSE', symbol: 'GOOD', name: 'Good Ltd', assetType: 'EQUITY' });

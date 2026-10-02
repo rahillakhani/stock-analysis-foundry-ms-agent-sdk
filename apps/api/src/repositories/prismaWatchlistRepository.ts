@@ -1,11 +1,12 @@
 import { Instrument, instrumentKey, WATCHLIST_LIMIT } from '@stock-analysis/shared';
 import type { PrismaClient } from '../db/prisma.ts';
-import type { WatchlistItem } from '../generated/prisma/client.ts';
+import { Prisma, type WatchlistItem } from '../generated/prisma/client.ts';
 import { WatchlistFullError, type PinnedInstrument, type WatchlistRepository } from './watchlistRepository.ts';
 
 /**
- * Postgres-backed watchlist. The size limit is checked inside the pinning transaction; two concurrent first-time
- * pins at the limit can exceed it by one (accepted: a soft cap for display, not an invariant).
+ * Postgres-backed watchlist. The size limit is checked inside the pinning transaction; concurrent first-time pins
+ * of different keys at the limit can exceed it slightly (accepted: a soft cap, not an invariant). Concurrent pins
+ * of the same key are idempotent.
  */
 export class PrismaWatchlistRepository implements WatchlistRepository {
   readonly #db: PrismaClient;
@@ -17,10 +18,8 @@ export class PrismaWatchlistRepository implements WatchlistRepository {
   }
 
   async list(): Promise<PinnedInstrument[]> {
-    const rows = await this.#db.watchlistItem.findMany({
-      orderBy: [{ pinnedAt: 'desc' }, { instrumentKey: 'asc' }],
-      take: WATCHLIST_LIMIT,
-    });
+    // No `take`: the cap is soft (see the class comment), and a row hidden by it would still count toward it.
+    const rows = await this.#db.watchlistItem.findMany({ orderBy: [{ pinnedAt: 'desc' }, { instrumentKey: 'asc' }] });
     // An unreadable row is left out rather than failing the whole list.
     return rows.flatMap((row) => {
       const item = toPinned(row);
@@ -31,14 +30,21 @@ export class PrismaWatchlistRepository implements WatchlistRepository {
   async pin(input: Instrument): Promise<PinnedInstrument> {
     const instrument = Instrument.parse(input);
     const key = instrumentKey(instrument);
-    const row = await this.#db.$transaction(async (tx) => {
-      const existing = await tx.watchlistItem.findUnique({ where: { instrumentKey: key } });
-      if (existing) return existing;
-      if ((await tx.watchlistItem.count()) >= WATCHLIST_LIMIT) {
-        throw new WatchlistFullError(`The watchlist holds at most ${WATCHLIST_LIMIT} instruments`);
-      }
-      return tx.watchlistItem.create({ data: { instrumentKey: key, instrument, pinnedAt: this.#now() } });
-    });
+    let row: WatchlistItem;
+    try {
+      row = await this.#db.$transaction(async (tx) => {
+        const existing = await tx.watchlistItem.findUnique({ where: { instrumentKey: key } });
+        if (existing) return existing;
+        if ((await tx.watchlistItem.count()) >= WATCHLIST_LIMIT) {
+          throw new WatchlistFullError(`The watchlist holds at most ${WATCHLIST_LIMIT} instruments`);
+        }
+        return tx.watchlistItem.create({ data: { instrumentKey: key, instrument, pinnedAt: this.#now() } });
+      });
+    } catch (err) {
+      // A concurrent first pin of the same key won the insert: pinning is idempotent, so return that row.
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') throw err;
+      row = await this.#db.watchlistItem.findUniqueOrThrow({ where: { instrumentKey: key } });
+    }
     return {
       instrumentKey: row.instrumentKey,
       instrument: Instrument.parse(row.instrument),

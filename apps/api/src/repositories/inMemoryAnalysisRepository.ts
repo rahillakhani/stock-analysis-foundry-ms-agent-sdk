@@ -20,6 +20,7 @@ import {
   type AnalysisRepository,
   type CompletedRunInput,
   type RunFailure,
+  type AnalysedStocksQuery,
   type StockRecord,
 } from './analysisRepository.ts';
 
@@ -138,9 +139,11 @@ export class InMemoryAnalysisRepository implements AnalysisRepository {
     return Promise.resolve(ordered.slice(-clampTimelineLimit(limit)));
   }
 
-  async listAnalysedStocks(limit?: number): Promise<AnalysedStock[]> {
+  async listAnalysedStocks({ limit, keys }: AnalysedStocksQuery = {}): Promise<AnalysedStock[]> {
+    const wanted = keys && new Set(keys);
     const analysed = [...this.#stocks.values()]
       .filter((s): s is StockRecord & { lastAnalysedAt: string } => s.lastAnalysedAt !== null)
+      .filter((s) => !wanted || wanted.has(s.instrumentKey))
       .sort(
         (a, b) => b.lastAnalysedAt.localeCompare(a.lastAnalysedAt) || a.instrumentKey.localeCompare(b.instrumentKey),
       )

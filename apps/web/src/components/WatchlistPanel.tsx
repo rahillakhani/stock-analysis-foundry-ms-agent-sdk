@@ -60,7 +60,7 @@ export function WatchlistPanel({ watchlist, onSelect }: Props) {
                 <button
                   type="button"
                   onClick={() => watchlist.toggle(item.instrumentKey)}
-                  disabled={watchlist.busyKey === item.instrumentKey}
+                  disabled={watchlist.isBusy(item.instrumentKey)}
                   aria-label={`Unpin ${item.name}`}
                   title="Unpin"
                   className="mt-1.5 rounded p-1 text-ink-3 hover:bg-surface-2 hover:text-ink focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
@@ -89,7 +89,8 @@ function WatchRow({ item, onSelect }: { item: WatchlistItem; onSelect: (key: str
     <button
       type="button"
       onClick={() => onSelect(item.instrumentKey)}
-      className="min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus"
+      disabled={item.expired}
+      className="min-w-0 flex-1 rounded-md disabled:cursor-default disabled:opacity-60 px-1.5 py-1.5 text-left hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus"
     >
       <span className="flex items-center justify-between gap-2">
         <span className="min-w-0 truncate font-medium text-ink">{item.name}</span>
@@ -114,7 +115,9 @@ function WatchRow({ item, onSelect }: { item: WatchlistItem; onSelect: (key: str
           </span>
         )}
       </span>
-      {latest ? (
+      {item.expired ? (
+        <span className="mt-1 block text-xs text-ink-2">Contract expired. Unpin it.</span>
+      ) : latest ? (
         <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-3">
           <DecisionBadge indicator={latest.indicator} size="sm" />
           <span>
@@ -143,7 +146,7 @@ export function PinButton({
   name: string;
 }) {
   const pinned = watchlist.isPinned(instrumentKey);
-  const busy = watchlist.busyKey === instrumentKey;
+  const busy = watchlist.isBusy(instrumentKey);
   return (
     <button
       type="button"

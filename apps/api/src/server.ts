@@ -69,6 +69,7 @@ const watchlist = new WatchlistService({
   analyses: repository,
   directory,
   market: uiMarket,
+  now,
   logger: logger.child({ component: 'watchlist' }),
 });
 const service = new AnalysisService({

@@ -161,6 +161,7 @@ export const watchlistWith = (...keys: string[]) =>
       exchange: key.split(':')[0],
       assetType: 'EQUITY',
       pinnedAt: '2026-10-01T09:00:00.000Z',
+      expired: false,
       quote: { currency: 'INR', price: 152.5, change: -2.5, changePct: -1.61, marketState: 'REGULAR' },
       latest:
         key === 'NSE:TATASTEEL'

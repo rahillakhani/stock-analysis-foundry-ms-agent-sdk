@@ -3,13 +3,16 @@ import {
   AnalysisRunView,
   AnalyzeAccepted,
   LookupResponse,
+  ResearchSnapshot,
   SearchResponse,
 } from '@stock-analysis/shared';
 import { pino } from 'pino';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../app.ts';
+import { evaluate } from '../domain/decision/evaluate.ts';
 import { POLICY_V1, POLICY_V2 } from '../domain/decision/policy.ts';
+import { strongEquity } from '../test-support/snapshots.ts';
 import { FIXTURE_INSTRUMENTS } from '../domain/instruments/fixtureInstruments.ts';
 import { InMemoryInstrumentMaster } from '../domain/instruments/instrumentMaster.ts';
 import { InstrumentDirectory } from '../domain/instruments/instrumentDirectory.ts';
@@ -287,6 +290,24 @@ describe('GET /api/v1/stocks', () => {
 });
 
 describe('buy guidance on completed runs', () => {
+  it('omits guidance (rather than failing the read) for a policy version this build does not know', async () => {
+    const ctx = setup();
+    const snapshot = ResearchSnapshot.parse(strongEquity());
+    const stock = await ctx.repository.upsertStock(snapshot.instrument);
+    const run = await ctx.repository.createRun(stock.id);
+    await ctx.repository.completeRun(run.id, {
+      status: 'SUCCEEDED',
+      decision: { ...evaluate(snapshot, POLICY_V1, ctx.clock.now()), policyVersion: 'v99' },
+      explanation: { status: 'UNAVAILABLE' },
+      snapshot,
+      sources: snapshot.sources,
+      unavailableDimensions: [],
+    });
+    const res = await request(ctx.app).get(`/api/v1/analysis-runs/${run.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('buyGuidance');
+  });
+
   it('is included when a run is read and in the existing analysis on lookup', async () => {
     const ctx = setup();
     const runId = await analyzeAndWait(ctx, 'NSE:TATASTEEL');

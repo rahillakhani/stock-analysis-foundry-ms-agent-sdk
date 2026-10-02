@@ -22,6 +22,7 @@ import {
   type AnalysisRepository,
   type CompletedRunInput,
   type RunFailure,
+  type AnalysedStocksQuery,
   type StockRecord,
 } from './analysisRepository.ts';
 
@@ -205,9 +206,9 @@ export class PrismaAnalysisRepository implements AnalysisRepository {
     return run ? toRunView(run, run.stock) : null;
   }
 
-  async listAnalysedStocks(limit?: number): Promise<AnalysedStock[]> {
+  async listAnalysedStocks({ limit, keys }: AnalysedStocksQuery = {}): Promise<AnalysedStock[]> {
     const stocks = await this.#db.stock.findMany({
-      where: { lastAnalysedAt: { not: null } },
+      where: { lastAnalysedAt: { not: null }, ...(keys ? { instrumentKey: { in: [...keys] } } : {}) },
       orderBy: [{ lastAnalysedAt: 'desc' }, { instrumentKey: 'asc' }],
       take: clampStocksLimit(limit),
       include: {
