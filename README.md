@@ -2,7 +2,8 @@
 
 AI stock and futures research engine: a deterministic TypeScript decision engine, research providers, and (later)
 Azure OpenAI explanations. See `requirements.md` for the spec, `implementation-plan.md` for the phased plan and
-progress ledger, and `docs/decision-policy-v1.md` for exactly how BUY / DON'T BUY / NEUTRAL is decided.
+progress ledger, `docs/architecture.md` for the high-level and low-level design (as built), and
+`docs/decision-policy-v1.md` for exactly how BUY / DON'T BUY / NEUTRAL is decided.
 
 > **Status: MVP usable end to end with live data.** Search any NSE, BSE, NASDAQ, or NYSE stock (e.g. `MRF`,
 > `MakeMyTrip`, `MMYT`); it is looked up and researched on the web via Yahoo Finance, then rated by the documented
